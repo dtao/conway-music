@@ -639,15 +639,19 @@ const DEGREES = SCALE.length;
 // config.js sequences). `octaves` restricts a note to a register. A mode
 // may carry its own `scale` (7 semitone offsets from the A root) to reach
 // notes outside A natural minor; degrees index into that scale. Add a mode
-// here and it appears in the UI.
+// here and it appears in the UI; `hidden: true` keeps it out of the
+// dropdown without removing it. Chord-progression pools weight notes by
+// multiplicity (a degree listed three times is three times as likely).
 export const SOUND_MODES = {
   minor: {
     label: "A minor field",
+    hidden: true,
     notes: [0, 1, 2, 3, 4, 5, 6].map((degree) => ({ degree, weight: 1 })),
     sequences: "config",
   },
   cmajor: {
     label: "C major triads",
+    hidden: true,
     notes: [
       { degree: 2, weight: 6 }, // C
       { degree: 4, weight: 6 }, // E
@@ -672,6 +676,7 @@ export const SOUND_MODES = {
   },
   edorian: {
     label: "E dorian drift",
+    hidden: true,
     // A-rooted scale reaching outside natural minor: A B C# D E F# G.
     // Degrees here: 0=A 1=B 2=C# 3=D 4=E 5=F# 6=G.
     scale: [0, 2, 4, 5, 7, 9, 10],
@@ -716,8 +721,46 @@ export const SOUND_MODES = {
     notes: [0, 1, 2, 3, 4, 5, 6].map((degree) => ({ degree, weight: 1 })),
     sequences: [],
   },
+  ema: {
+    label: "Em–A",
+    // Dorian vamp: two bars of E minor, two of A major, 16 beats per
+    // cycle. Rides the A-rooted scale A B C# D E F# G.
+    // Degrees: 0=A 1=B 2=C# 3=D 4=E 5=F# 6=G.
+    scale: [0, 2, 4, 5, 7, 9, 10],
+    barBeats: 4,
+    progression: [
+      // Em: E G B dominant; C# and D sparse.
+      { name: "Em", pool: [4, 4, 4, 6, 6, 6, 1, 1, 1, 2, 3] },
+      { name: "Em", pool: [4, 4, 4, 6, 6, 6, 1, 1, 1, 2, 3] },
+      // A: A C# E dominant; G sparse.
+      { name: "A", pool: [0, 0, 0, 2, 2, 2, 4, 4, 4, 6] },
+      { name: "A", pool: [0, 0, 0, 2, 2, 2, 4, 4, 4, 6] },
+    ],
+    notes: [0, 1, 2, 3, 4, 6].map((degree) => ({ degree, weight: 1 })),
+    sequences: [],
+  },
+  cdbc: {
+    label: "C–D–Bm–C",
+    // Lydian-leaning vamp over the A-rooted scale A B C D E F# G
+    // (= C lydian / G major). Degrees: 0=A 1=B 2=C 3=D 4=E 5=F# 6=G.
+    scale: [0, 2, 3, 5, 7, 9, 10],
+    barBeats: 4,
+    progression: [
+      // C: C E G B dominant; D sparse.
+      { name: "C", pool: [2, 2, 2, 4, 4, 4, 6, 6, 6, 1, 1, 1, 3] },
+      // D: D F# A dominant; C sparse.
+      { name: "D", pool: [3, 3, 3, 5, 5, 5, 0, 0, 0, 2] },
+      // Bm: B D F# dominant; G and A sparse.
+      { name: "Bm", pool: [1, 1, 1, 3, 3, 3, 5, 5, 5, 6, 0] },
+      // C again: C E G dominant; B sparse.
+      { name: "C", pool: [2, 2, 2, 4, 4, 4, 6, 6, 6, 1] },
+    ],
+    notes: [0, 1, 2, 3, 4, 5, 6].map((degree) => ({ degree, weight: 1 })),
+    sequences: [],
+  },
   wholetone: {
     label: "Whole-tone dream",
+    hidden: true,
     // Six whole steps up from C: C D E F# G# A#. The pipeline expects
     // seven degrees, so degree 6 pads the octave (C again) and stays out
     // of the note pool and the sequences.

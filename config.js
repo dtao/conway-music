@@ -52,12 +52,13 @@ window.CONWAY_MUSIC_CONFIG = {
   // top panel (or L / shift+L).
   leads: [true, false],
 
-  // Sound mode: which note pool melodic cells draw from. "minor" is the
-  // full A natural minor field; "cmajor" favors C/E/G triads with sparse
-  // D and A, B only in high registers, and its own triadic sequences.
-  // Modes are defined as data in js/audio.js (SOUND_MODES) — add one there
-  // and it appears in the UI's mode selector automatically.
-  soundMode: "minor",
+  // Sound mode: which note pool melodic cells draw from. The dropdown
+  // currently offers three chord progressions — "famcg" (F–Am–C–G),
+  // "ema" (Em–A dorian vamp), and "cdbc" (C–D–Bm–C) — while the earlier
+  // scale-field modes (minor, cmajor, edorian, wholetone) remain in the
+  // code marked hidden. Modes are data in js/audio.js (SOUND_MODES): add
+  // one there and it appears in the selector; hidden: true keeps it out.
+  soundMode: "famcg",
 
   // Geographic mode: when true, a cell's position shapes its sound — rows
   // pick the register and voice family (sustained pads low, bright bells

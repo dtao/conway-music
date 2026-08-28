@@ -121,34 +121,32 @@ Play/Pause when you want the grid unobstructed.
 ### Sound modes
 
 The **mode selector** in the control bar (or `soundMode` in `config.js`)
-switches the note pool melodic cells draw from:
+currently offers three chord progressions. In a progression mode, every
+melodic cell becomes a riff that follows the changes: it keeps its own
+rhythm, voice, and timbre, but draws its notes from the current bar's
+chord pool (dominant chord tones weighted 3×, "sparse" color notes 1×).
+Cells born mid-cycle join in phase — the whole board tracks the
+progression — and the lead overlays snap to the tones of the chord
+sounding right now. Pads hold one chord tone per bar.
 
-- **A minor field** — the full A natural minor scale, uniformly weighted.
-- **C major triads** — heavily favors C, E, and G (duets pick both notes
-  from the weighted pool, so C–E / E–G / G–C figures dominate), with
-  sparse D and A, B only in the top two octaves, no F, and its own pool
-  of triadic composed sequences.
-- **E dorian drift** — dominated by E, G, and B, with F♯, C♯, and D
-  appearing sparsely and only in the upper registers. F♯ and C♯ live
-  outside A natural minor, so this mode carries its own scale.
-- **F–Am–C–G** — a chord progression, one bar (4 beats) per chord over a
-  16-beat cycle. Every melodic cell becomes a riff that follows the
-  changes: it keeps its own rhythm, voice, and timbre, but draws its
-  notes from the current chord's pool (F: F A B C E · Am: A B C E · C:
-  C E G B · G: G B D F). Cells born mid-cycle join in phase — the whole
-  board tracks the progression — and the lead overlays snap to the tones
-  of the chord sounding right now. Pads hold one chord tone per bar.
-- **Whole-tone dream** — C, D, E, F♯, G♯, A♯, all equally weighted: the
-  whole-tone scale, where the leads' 3rd/6th harmonies snap to major
-  thirds and augmented fifths for a floating, Debussy-like haze.
+- **F–Am–C–G** — one bar per chord over a 16-beat cycle (F: F A B C E ·
+  Am: A B C E · C: C E G B · G: G B D F).
+- **Em–A** — a dorian vamp: two bars of E minor (E G B dominant, C♯ and
+  D sparse), two of A major (A C♯ E dominant, G sparse).
+- **C–D–Bm–C** — a lydian-leaning cycle: C (C E G B, sparse D), D
+  (D F♯ A, sparse C), Bm (B D F♯, sparse G and A), back to C (C E G,
+  sparse B).
 
-Modes are pure data (`SOUND_MODES` in `js/audio.js`): a weighted list of
-scale degrees with optional register restrictions, a sequence pool, and
-optionally a mode-specific `scale` (7 semitone offsets from the A root)
-for notes outside the default A natural minor. Add an entry there and it
-appears in the selector automatically. Every cell remains unique in
-every mode, and the lead overlays follow whichever scale the mode
-defines.
+Four earlier scale-field modes (A minor field, C major triads, E dorian
+drift, Whole-tone dream) remain in the code marked `hidden: true` —
+remove the flag in `SOUND_MODES` to restore them to the dropdown.
+
+Modes are pure data (`SOUND_MODES` in `js/audio.js`): a weighted degree
+pool or a `progression` of per-chord pools, an optional mode-specific
+`scale` (7 semitone offsets from the A root) for notes outside A natural
+minor, and a sequence pool. Add an entry there and it appears in the
+selector automatically. Every cell remains unique in every mode, and the
+lead overlays follow whichever scale the mode defines.
 
 ### Geographic mode
 

@@ -11,7 +11,7 @@ const DEFAULTS = {
   maxVoices: 64,
   sequences: [],
   geographic: false,
-  soundMode: "minor",
+  soundMode: "famcg",
   leads: [true, false],
 };
 
@@ -461,12 +461,18 @@ for (let i = 0; i < PRESETS.length; i++) {
 }
 
 for (const [id, mode] of Object.entries(SOUND_MODES)) {
+  if (mode.hidden) continue;
   const option = document.createElement("option");
   option.value = id;
   option.textContent = mode.label;
   modeSelect.appendChild(option);
 }
-modeSelect.value = config.soundMode in SOUND_MODES ? config.soundMode : "minor";
+{
+  const visible = Object.keys(SOUND_MODES).filter((id) => !SOUND_MODES[id].hidden);
+  const valid = visible.includes(config.soundMode) ? config.soundMode : visible[0];
+  modeSelect.value = valid;
+  config.soundMode = valid;
+}
 
 leadButtons.forEach((button, i) => {
   button.classList.toggle("active", audio.leadsEnabled[i]);
