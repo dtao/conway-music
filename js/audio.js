@@ -372,7 +372,7 @@ function makeTimbre(voice, rng) {
   }
 }
 
-function mulberry32(seed) {
+export function mulberry32(seed) {
   let a = seed >>> 0;
   return function () {
     a |= 0;
