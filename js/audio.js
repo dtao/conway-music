@@ -717,6 +717,7 @@ export class AudioEngine {
 
 const LEAD_WINDOW_BEATS = 8; // rolling window the average listens to
 const LEAD_TAU_BEATS = 3; // recency half-life-ish decay inside the window
+const LEAD_SWELL_BEATS = 4; // beats of crescendo before a note reaches peak
 
 // Harmony intervals in semitones above the consensus note (snapped to the
 // mode afterwards, which resolves each to the scale-correct interval):
@@ -734,7 +735,7 @@ const LEAD_PROFILES = [
     vibratoDepth: 8,
     octaves: [2, 3],
     register: [24, 45], // ~A4 to ~E6
-    level: 0.22,
+    level: 0.27,
     filterBase: 500,
     filterSpan: 2800,
     swell: 0.7,
@@ -746,7 +747,7 @@ const LEAD_PROFILES = [
     vibratoDepth: 6,
     octaves: [1, 2],
     register: [12, 33], // ~A3 to ~E5
-    level: 0.2,
+    level: 0.25,
     filterBase: 350,
     filterSpan: 1600,
     swell: 1.0,
@@ -800,10 +801,11 @@ class LeadOverlay {
 
   /**
    * Per-beat expression. Notes are held at least two beats (half notes
-   * minimum). Each new note gets a phrase arc — a crescendo into the note
-   * over a beat and a quarter, then a relaxed fade toward a sustain level —
-   * so the voice audibly swells and dies away instead of sitting at a
-   * near-constant volume.
+   * minimum). Each new note gets a phrase arc scheduled ONCE at its onset:
+   * a soft articulation, then a long crescendo that only reaches peak if
+   * the note survives LEAD_SWELL_BEATS, then a slow relax. While a note
+   * holds, the gain automation is left untouched so the arc actually plays
+   * out — cancelling it every beat is what made earlier swells flat.
    */
   update(time, hz, activity, beat) {
     const p = this.profile;
@@ -813,33 +815,39 @@ class LeadOverlay {
       p.filterBase + p.filterSpan * shaped, time, p.swell);
 
     const g = this.gain.gain;
+
+    if (activity <= 0) {
+      // Silent board: fade out and let the next note re-articulate.
+      this._holdGain(time);
+      g.setTargetAtTime(0, time, p.swell);
+      this._level = 0;
+      return;
+    }
+
     const wantsChange =
       hz !== null && (this.freq === null || Math.abs(hz - this.freq) > 0.5);
+    if (!wantsChange || time < this.holdUntil) return; // let the arc breathe
 
-    if (wantsChange && time >= this.holdUntil) {
-      if (this.freq === null) {
-        this.osc.frequency.setValueAtTime(hz, time);
-      } else {
-        // Portamento to the new note.
-        this.osc.frequency.cancelScheduledValues(time);
-        this.osc.frequency.setValueAtTime(this.freq, time);
-        this.osc.frequency.exponentialRampToValueAtTime(hz, time + Math.min(0.35, beat * 0.8));
-      }
-      this.freq = hz;
-      this.holdUntil = time + 2 * beat;
-
-      // Phrase arc: swell into the new note, then let it relax.
-      this._holdGain(time);
-      g.linearRampToValueAtTime(Math.min(p.level, level * 1.35), time + 1.25 * beat);
-      g.setTargetAtTime(level * 0.7, time + 1.25 * beat, 1.6 * beat);
-      this._level = level * 0.7;
+    if (this.freq === null) {
+      this.osc.frequency.setValueAtTime(hz, time);
     } else {
-      // Held note (or silent board): drift toward the activity level,
-      // which fades the voice out entirely when the board goes quiet.
-      this._holdGain(time);
-      g.setTargetAtTime(level * 0.75, time, p.swell * 1.5);
-      this._level = level * 0.75;
+      // Portamento to the new note.
+      this.osc.frequency.cancelScheduledValues(time);
+      this.osc.frequency.setValueAtTime(this.freq, time);
+      this.osc.frequency.exponentialRampToValueAtTime(hz, time + Math.min(0.35, beat * 0.8));
     }
+    this.freq = hz;
+    this.holdUntil = time + 2 * beat;
+
+    // The phrase arc: ease down to a soft articulation, crescendo over
+    // LEAD_SWELL_BEATS toward peak, then relax if the note holds longer.
+    const peak = Math.min(p.level, level * 1.25);
+    const sustain = level * 0.55;
+    this._holdGain(time);
+    g.linearRampToValueAtTime(level * 0.3, time + 0.3 * beat);
+    g.linearRampToValueAtTime(peak, time + LEAD_SWELL_BEATS * beat);
+    g.setTargetAtTime(sustain, time + LEAD_SWELL_BEATS * beat, 2.5 * beat);
+    this._level = sustain;
   }
 
   /** Freeze the gain at its current value so new ramps start click-free. */
