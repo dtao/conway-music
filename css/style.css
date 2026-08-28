@@ -107,6 +107,13 @@ body {
   min-width: 2.2rem;
 }
 
+.panel-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 0.1rem 0.25rem;
+  background: var(--border);
+}
+
 /* ---- control bar ---- */
 
 #controls {

@@ -27,7 +27,9 @@ export class AudioEngine {
   constructor(config, cellValues) {
     this.config = config;
     this.cellValues = cellValues; // per-cell [0,1) values (hue + file mapping)
+    // Cells are addressed by global id: gridIndex * cellCount + localIndex.
     this.cellCount = config.grid.cols * config.grid.rows;
+    this.gridRhythms = config.gridRhythms || [1, 1.5, 0.75];
     this.ctx = null;
     this.master = null;
     this.bankLabel = "";
@@ -229,7 +231,18 @@ export class AudioEngine {
     }
 
     this._synthBpm = bpm;
-    this.bankLabel = `parametric synth (${this.cellCount} unique cells)`;
+    this.bankLabel = `parametric synth (${this.cellCount} unique cells per grid)`;
+  }
+
+  _gridOf(cellIndex) {
+    return Math.floor(cellIndex / this.cellCount);
+  }
+
+  /** Which progression bar is sounding after `beats` master beats (0 outside progressions). */
+  barAtBeat(beats) {
+    const mode = SOUND_MODES[this.config.soundMode] || SOUND_MODES.minor;
+    if (!mode.progression) return 0;
+    return Math.floor(beats / mode.barBeats) % mode.progression.length;
   }
 
   async _fetchManifest(url) {
@@ -307,16 +320,19 @@ export class AudioEngine {
   }
 
   /**
-   * Render buffers for (up to maxVoices of) the given alive cells before
-   * playback starts, so the first beat doesn't pay the whole render cost.
+   * Render buffers for (up to maxVoices of) the given grids' alive cells
+   * before playback starts, so the first beat doesn't pay the render cost.
    */
-  prewarm(cells) {
+  prewarm(gridsCells) {
     if (!this.ctx || !this.usesSynthBank) return;
     let warmed = 0;
-    for (let i = 0; i < cells.length && warmed < this.maxVoices; i++) {
-      if (!cells[i]) continue;
-      this.bufferForCell(i);
-      warmed++;
+    for (let g = 0; g < gridsCells.length; g++) {
+      const cells = gridsCells[g];
+      for (let i = 0; i < cells.length && warmed < this.maxVoices; i++) {
+        if (!cells[i]) continue;
+        this.bufferForCell(g * this.cellCount + i);
+        warmed++;
+      }
     }
   }
 
@@ -327,7 +343,8 @@ export class AudioEngine {
   _panForCell(cellIndex) {
     const cols = this.config.grid.cols;
     if (cols < 2) return 0;
-    return ((cellIndex % cols) / (cols - 1) * 2 - 1) * 0.8;
+    const col = (cellIndex % this.cellCount) % cols;
+    return ((col / (cols - 1)) * 2 - 1) * 0.8;
   }
 
   _gainForCell(cellIndex) {
@@ -352,12 +369,12 @@ export class AudioEngine {
   }
 
   /**
-   * Start a cell's looping voice at audio-clock time `when`. `beatIndex`
-   * phase-locks chord-progression cells: the voice starts on the current
-   * bar's buffer (offset within it for sustained pads), and chordBarTick
-   * rotates it onto each subsequent bar.
+   * Start a cell's looping voice at audio-clock time `when`. For
+   * chord-progression cells, `bar` picks which chord's buffer to start on
+   * (chordBarTick rotates it afterwards), and `masterBeat` phase-offsets
+   * sustained whole-bar pads so they join mid-bar in place.
    */
-  startVoice(cellIndex, when, beatIndex = 0) {
+  startVoice(cellIndex, when, bar = 0, masterBeat = 0) {
     if (this.voices.has(cellIndex)) return;
     if (this.voices.size >= this.maxVoices) this._stealOldestVoice(when);
 
@@ -366,9 +383,8 @@ export class AudioEngine {
     if (this.usesSynthBank) {
       const recipe = this.recipeFor(cellIndex);
       if (recipe.type === "chord") {
-        const bar = Math.floor(beatIndex / recipe.barBeats) % recipe.barSemis.length;
         buffer = this.bufferForCell(cellIndex, bar);
-        if (recipe.sustain) offset = (beatIndex % recipe.barBeats) * (60 / this._synthBpm);
+        if (recipe.sustain) offset = (masterBeat % recipe.barBeats) * (60 / this._synthBpm);
       } else {
         buffer = this.bufferForCell(cellIndex);
       }
@@ -389,22 +405,22 @@ export class AudioEngine {
     const cleanup = this._buildVoiceChain(cellIndex, gain);
     source.start(when, offset);
 
-    this.voices.set(cellIndex, { source, gain, cleanup, startedAt: when });
+    this.voices.set(cellIndex, { source, gain, cleanup, startedAt: when, bar });
   }
 
   /**
-   * Rotate every chord-mode voice onto the next bar's buffer, scheduled
-   * sample-accurately at `time`. Call once per beat; no-ops off bar
-   * boundaries and outside progression modes.
+   * Rotate one grid's chord-mode voices onto `bar`'s buffers, scheduled
+   * sample-accurately at `time`. Called at each of that grid's step
+   * boundaries; voices already on the bar are untouched, so a grid whose
+   * steps straddle bar lines picks the new chord up at its next step.
    */
-  chordBarTick(time, beatIndex) {
+  chordBarTick(gridIndex, time, bar) {
     if (!this.ctx || !this.usesSynthBank) return;
     const mode = SOUND_MODES[this.config.soundMode] || SOUND_MODES.minor;
     if (!mode.progression) return;
-    if (beatIndex === 0 || beatIndex % mode.barBeats !== 0) return;
-    const bar = Math.floor(beatIndex / mode.barBeats) % mode.progression.length;
 
     for (const [cellIndex, voice] of this.voices) {
+      if (this._gridOf(cellIndex) !== gridIndex || voice.bar === bar) continue;
       const recipe = this.recipeFor(cellIndex);
       if (recipe.type !== "chord") continue;
       const buffer = this.bufferForCell(cellIndex, bar);
@@ -417,6 +433,7 @@ export class AudioEngine {
       old.onended = () => old.disconnect();
       source.start(time);
       voice.source = source;
+      voice.bar = bar;
     }
   }
 
@@ -930,8 +947,15 @@ export function makeRecipe(cellIndex, config) {
   const geo = !!config.geographic;
   const cols = config.grid.cols;
   const rows = config.grid.rows;
-  const row = Math.floor(cellIndex / cols);
-  const col = cellIndex % cols;
+  // cellIndex is a global id: gridIndex * (cols*rows) + local index. Each
+  // grid carries its own step length in beats (quarter / dotted quarter /
+  // dotted eighth by default), which every figure is rendered to fit.
+  const perGrid = cols * rows;
+  const gridIndex = Math.floor(cellIndex / perGrid);
+  const local = cellIndex % perGrid;
+  const stepBeats = (config.gridRhythms || [1, 1.5, 0.75])[gridIndex] ?? 1;
+  const row = Math.floor(local / cols);
+  const col = local % cols;
   const height = rows > 1 ? 1 - row / (rows - 1) : 0.5; // 0 bottom, 1 top
   const band = GEO_BANDS[Math.min(3, Math.floor(height * 4))];
   const sequences = mode.sequences === "config" ? config.sequences || [] : mode.sequences;
@@ -956,6 +980,7 @@ export function makeRecipe(cellIndex, config) {
       peak,
       noiseSeed,
       gainTrim,
+      stepBeats,
     };
   }
 
@@ -976,17 +1001,21 @@ export function makeRecipe(cellIndex, config) {
       peak: VOICE_PEAKS[voice],
       noiseSeed,
       gainTrim,
+      stepBeats,
     };
   }
 
-  const voice = geo
+  let voice = geo
     ? band[0][Math.floor(rng() * band[0].length)]
     : VOICE_POOL[Math.floor(rng() * VOICE_POOL.length)];
+  // Whole-bar pads belong to the quarter-note grid; the rhythmic-layer
+  // grids trade them for muted plucks.
+  if (voice === "pad" && stepBeats !== 1) voice = "muted";
   const octave = geo ? band[1] : Math.floor(rng() * 4);
 
   // Chord-progression mode: the cell renders a full-cycle figure whose
   // notes follow each bar's chord pool. Pads hold one note per bar;
-  // other voices repeat their per-beat rhythm on chord tones.
+  // other voices repeat their per-step rhythm on chord tones.
   if (mode.progression) {
     const sustain = voice === "pad";
     const rhythm = sustain
@@ -1021,6 +1050,7 @@ export function makeRecipe(cellIndex, config) {
       peak: VOICE_PEAKS[voice],
       noiseSeed,
       gainTrim,
+      stepBeats,
     };
   }
 
@@ -1043,6 +1073,7 @@ export function makeRecipe(cellIndex, config) {
     peak: VOICE_PEAKS[voice],
     noiseSeed,
     gainTrim,
+    stepBeats,
   };
 }
 
@@ -1094,6 +1125,10 @@ const PERC_VOICES = { kick, snare, hat, shaker, block, tom };
 
 function renderRecipe(ctx, recipe, bpm, bar = 0) {
   const beat = 60 / bpm;
+  // Figures are laid out in the cell's grid's step unit — a quarter note on
+  // the primary grid, dotted values on the rhythmic layers — so the same
+  // notation breathes at each grid's own pace.
+  const unit = beat * (recipe.stepBeats || 1);
   const sampleRate = ctx.sampleRate;
   const rng = mulberry32(recipe.noiseSeed);
 
@@ -1127,13 +1162,13 @@ function renderRecipe(ctx, recipe, bpm, bar = 0) {
     notes = parseRhythm(recipe.rhythm);
   }
 
-  const length = Math.max(1, Math.round(sampleRate * beat * beats));
+  const length = Math.max(1, Math.round(sampleRate * unit * beats));
   const buffer = ctx.createBuffer(1, length, sampleRate);
   const data = buffer.getChannelData(0);
 
   if (recipe.type === "perc") {
     const render = PERC_VOICES[recipe.instrument];
-    for (const note of notes) render(data, sampleRate, note.onset * beat, recipe, rng);
+    for (const note of notes) render(data, sampleRate, note.onset * unit, recipe, rng);
   } else {
     const render = MELODIC_VOICES[recipe.voice] || pluck;
     for (const note of notes) {
@@ -1142,8 +1177,8 @@ function renderRecipe(ctx, recipe, bpm, bar = 0) {
           ? ROOT_HZ * Math.pow(2, note.semi / 12)
           : degreeHz(note.degree, recipe.scale);
       render(
-        data, sampleRate, note.onset * beat,
-        hz * recipe.detune, note.dur * beat,
+        data, sampleRate, note.onset * unit,
+        hz * recipe.detune, note.dur * unit,
         recipe.timbre, rng
       );
     }

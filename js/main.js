@@ -1,6 +1,6 @@
 import { LifeGrid } from "./life.js";
 import { AudioEngine, SOUND_MODES, mulberry32 } from "./audio.js";
-import { encodeBoard, decodeFragment } from "./share.js";
+import { encodeBoards, decodeFragment } from "./share.js";
 import { PRESETS, stampPreset } from "./patterns.js";
 
 const DEFAULTS = {
@@ -13,6 +13,8 @@ const DEFAULTS = {
   geographic: false,
   soundMode: "famcg",
   leads: [false, false],
+  gridCount: 1,
+  gridRhythms: [1, 1.5, 0.75],
 };
 
 const userConfig = window.CONWAY_MUSIC_CONFIG || {};
@@ -26,13 +28,21 @@ const config = {
 // ---------------------------------------------------------------------------
 // State
 
-const grid = new LifeGrid(config.grid.cols, config.grid.rows);
+const COLS = config.grid.cols;
+const ROWS = config.grid.rows;
+const PER_GRID = COLS * ROWS;
+const MAX_GRIDS = 3;
+// Beats per step for each grid: quarter, dotted quarter, dotted eighth.
+const STEP_BEATS = [0, 1, 2].map((g) => config.gridRhythms[g] ?? 1);
+const RHYTHM_GLYPHS = ["♩", "♩.", "♪."];
+
+const lifes = Array.from({ length: MAX_GRIDS }, () => new LifeGrid(COLS, ROWS));
+let gridCount = Math.max(1, Math.min(MAX_GRIDS, config.gridCount || 1));
 
 // Each cell gets a stable value in [0, 1) from a seeded PRNG, used for its
-// hue and (in file mode) its mapping onto the loaded audio files. In
-// parametric synth mode each cell derives its own full synthesis recipe
-// inside the audio engine.
-const soundValues = new Float32Array(grid.cells.length);
+// hue and (in file mode) its mapping onto the loaded audio files. Cells are
+// addressed globally: gridIndex * PER_GRID + local index.
+const soundValues = new Float32Array(PER_GRID * MAX_GRIDS);
 {
   const rng = mulberry32(config.assignmentSeed);
   for (let i = 0; i < soundValues.length; i++) soundValues[i] = rng();
@@ -40,26 +50,34 @@ const soundValues = new Float32Array(grid.cells.length);
 
 const audio = new AudioEngine(config, soundValues);
 
+function globalId(g, localIndex) {
+  return g * PER_GRID + localIndex;
+}
+
 let bpm = config.bpm;
 let playing = false;
-let firstBeatPending = false;
-let beatCounter = 0; // beats since play started; phase for chord-mode cells
-let nextBeatTime = 0;
 let schedulerTimer = null;
+
+// Master beat lattice (quarter notes): drives the chord progression, the
+// lead overlays, and the auto-pause check. Each grid then steps on its own
+// lattice of STEP_BEATS[g]-beat steps against the same clock.
+let masterBeat = 0;
+let nextMasterTime = 0;
+const stepIndex = [0, 0, 0];
+const nextStepTime = [0, 0, 0];
+const firstStepPending = [true, true, true];
 
 const LOOKAHEAD_MS = 25;
 const SCHEDULE_AHEAD = 0.12; // seconds of audio scheduled in advance
 
-// Snapshots queued by the scheduler, applied to the display at beat time so
-// visuals stay locked to the audio clock.
-let beatQueue = [];
-let viewCells = grid.cells;
-let viewGeneration = 0;
-let lastBeatVisualTime = 0;
+// Snapshots queued by the scheduler, applied to the display at their audio
+// time so visuals stay locked to what's heard. One view per grid.
+let frameQueue = []; // { g, time, cells, generation, births, deaths }
+const view = lifes.map((life) => ({ cells: life.cells, generation: 0, lastStepTime: 0 }));
 
 // Per-cell timestamps (audio clock) for birth flashes and death ghosts.
-const bornAt = new Float64Array(grid.cells.length).fill(-Infinity);
-const diedAt = new Float64Array(grid.cells.length).fill(-Infinity);
+const bornAt = new Float64Array(PER_GRID * MAX_GRIDS).fill(-Infinity);
+const diedAt = new Float64Array(PER_GRID * MAX_GRIDS).fill(-Infinity);
 
 // ---------------------------------------------------------------------------
 // DOM
@@ -74,6 +92,7 @@ const shareButton = document.getElementById("share");
 const presetSelect = document.getElementById("presets");
 const modeSelect = document.getElementById("mode");
 const leadButtons = [document.getElementById("lead1"), document.getElementById("lead2")];
+const gridButtons = [1, 2, 3].map((n) => document.getElementById(`grids${n}`));
 const collapseButton = document.getElementById("collapse");
 const controlsBar = document.getElementById("controls");
 const bpmSlider = document.getElementById("bpm");
@@ -109,6 +128,14 @@ function beatDuration() {
   return 60 / bpm;
 }
 
+function visibleLifes() {
+  return lifes.slice(0, gridCount);
+}
+
+function totalPopulation() {
+  return visibleLifes().reduce((sum, life) => sum + life.population, 0);
+}
+
 async function togglePlay() {
   if (playing) {
     pause();
@@ -119,179 +146,243 @@ async function togglePlay() {
 
 async function play() {
   await ensureAudio();
-  // Synth figures are rendered to fit one beat, so retune the bank if the
-  // tempo changed since it was built (no voices are looping while paused).
+  // Synth figures are rendered to fit their grid's step, so retune the bank
+  // if the tempo changed since it was built.
   audio.rebuildSynthBank(bpm);
   // Render the starting cells' buffers up front so the first beat is clean.
-  audio.prewarm(grid.cells);
+  audio.prewarm(visibleLifes().map((life) => life.cells));
   playing = true;
-  beatCounter = 0;
-  firstBeatPending = true;
-  nextBeatTime = audio.now + 0.08;
-  beatQueue = [];
+  masterBeat = 0;
+  const start = audio.now + 0.08;
+  nextMasterTime = start;
+  for (let g = 0; g < MAX_GRIDS; g++) {
+    stepIndex[g] = 0;
+    nextStepTime[g] = start;
+    firstStepPending[g] = true;
+  }
+  frameQueue = [];
   playButton.innerHTML = "&#10074;&#10074; Pause";
-  schedulerTimer = setInterval(scheduleBeats, LOOKAHEAD_MS);
+  schedulerTimer = setInterval(scheduleAhead, LOOKAHEAD_MS);
 }
 
 function pause() {
   playing = false;
   clearInterval(schedulerTimer);
   schedulerTimer = null;
-  beatQueue = [];
+  frameQueue = [];
   if (audio.ctx) audio.stopAllVoices();
-  viewCells = grid.cells;
-  viewGeneration = grid.generation;
+  for (let g = 0; g < MAX_GRIDS; g++) {
+    view[g].cells = lifes[g].cells;
+    view[g].generation = lifes[g].generation;
+  }
   playButton.innerHTML = "&#9654; Play";
   updateGenerationLabel();
   syncHash();
 }
 
-function scheduleBeats() {
-  while (nextBeatTime < audio.now + SCHEDULE_AHEAD) {
-    scheduleBeat(nextBeatTime);
-    if (!playing) return; // an empty board auto-pauses mid-loop
-    nextBeatTime += beatDuration();
+/** Schedule master beats and every visible grid's steps, in time order. */
+function scheduleAhead() {
+  const horizon = audio.now + SCHEDULE_AHEAD;
+  while (playing) {
+    // Earliest pending event wins; master beats break ties so the chord
+    // and overlay state are current before any step at the same instant.
+    let which = -1; // -1 = master beat
+    let best = nextMasterTime;
+    for (let g = 0; g < gridCount; g++) {
+      if (nextStepTime[g] < best - 1e-9) {
+        best = nextStepTime[g];
+        which = g;
+      }
+    }
+    if (best >= horizon) return;
+    if (which === -1) {
+      masterTick(nextMasterTime);
+      nextMasterTime += beatDuration();
+    } else {
+      scheduleStep(which, nextStepTime[which], stepIndex[which]);
+      stepIndex[which]++;
+      nextStepTime[which] += STEP_BEATS[which] * beatDuration();
+    }
   }
 }
 
-function scheduleBeat(time) {
+function masterTick(time) {
+  audio.overlayBeat(time, bpm, totalPopulation(), masterBeat);
+  masterBeat++;
+  if (totalPopulation() === 0) pause();
+}
+
+function scheduleStep(g, time, index) {
+  const life = lifes[g];
   let births;
   let deaths = [];
 
-  if (firstBeatPending) {
-    // Generation 0: every cell of the user's starting pattern comes in.
-    firstBeatPending = false;
+  if (firstStepPending[g]) {
+    // Step 0: every cell of the starting pattern comes in.
+    firstStepPending[g] = false;
     births = [];
-    for (let i = 0; i < grid.cells.length; i++) if (grid.cells[i]) births.push(i);
+    for (let i = 0; i < life.cells.length; i++) if (life.cells[i]) births.push(i);
   } else {
-    ({ births, deaths } = grid.step());
+    ({ births, deaths } = life.step());
   }
 
-  for (const i of deaths) audio.stopVoice(i, time);
-  audio.chordBarTick(time, beatCounter);
-  for (const i of births) audio.startVoice(i, time, beatCounter);
-  audio.overlayBeat(time, bpm, grid.population, beatCounter);
-  beatCounter++;
+  // The chord bar in effect when this step begins governs its notes.
+  const bar = audio.barAtBeat(index * STEP_BEATS[g]);
+  for (const i of deaths) audio.stopVoice(globalId(g, i), time);
+  audio.chordBarTick(g, time, bar);
+  for (const i of births) {
+    audio.startVoice(globalId(g, i), time, bar, g === 0 ? index : 0);
+  }
 
-  beatQueue.push({
+  frameQueue.push({
+    g,
     time,
-    generation: grid.generation,
-    cells: grid.cells.slice(),
+    generation: life.generation,
+    cells: life.cells.slice(),
     births,
     deaths,
   });
-
-  if (grid.population === 0 && births.length === 0) pause();
 }
 
 // ---------------------------------------------------------------------------
 // Editing
 
-function toggleCell(col, row, forceAlive = null) {
-  const i = grid.index(col, row);
-  const wasAlive = grid.cells[i] === 1;
+function toggleCell(g, col, row, forceAlive = null) {
+  const life = lifes[g];
+  const i = life.index(col, row);
+  const id = globalId(g, i);
+  const wasAlive = life.cells[i] === 1;
   const alive = forceAlive === null ? !wasAlive : forceAlive;
   if (alive === wasAlive) return;
-  grid.cells[i] = alive ? 1 : 0;
+  life.cells[i] = alive ? 1 : 0;
 
   if (playing && audio.ctx) {
     // Live editing: the cell joins or leaves the music immediately.
-    if (alive) audio.startVoice(i, audio.now, beatCounter);
-    else audio.stopVoice(i, audio.now);
-    if (viewCells !== grid.cells) viewCells[i] = alive ? 1 : 0;
-    // Snapshots already queued for upcoming beats predate this edit.
-    for (const frame of beatQueue) frame.cells[i] = alive ? 1 : 0;
+    if (alive) audio.startVoice(id, audio.now, audio.barAtBeat(masterBeat), masterBeat);
+    else audio.stopVoice(id, audio.now);
+    if (view[g].cells !== life.cells) view[g].cells[i] = alive ? 1 : 0;
+    // Snapshots already queued for upcoming steps predate this edit.
+    for (const frame of frameQueue) if (frame.g === g) frame.cells[i] = alive ? 1 : 0;
   } else {
     // While paused, preview the cell's sound as it is painted on.
-    if (alive) ensureAudio().then(() => audio.preview(i));
+    if (alive) ensureAudio().then(() => audio.preview(id));
     syncHash();
   }
-  if (alive) bornAt[i] = audio.ctx ? audio.now : performance.now() / 1000;
+  if (alive) bornAt[id] = audio.ctx ? audio.now : performance.now() / 1000;
 }
 
 function clearBoard() {
   if (playing) pause();
-  grid.clear();
-  viewCells = grid.cells;
-  viewGeneration = 0;
+  for (const life of lifes) life.clear();
+  for (let g = 0; g < MAX_GRIDS; g++) {
+    view[g].cells = lifes[g].cells;
+    view[g].generation = 0;
+  }
   updateGenerationLabel();
   syncHash();
 }
 
 function randomizeBoard() {
-  // Draw the density fresh each click, biased toward the sparse end, so
-  // Random ranges from a handful of seeds to a crowded board.
-  const density = 0.03 + 0.3 * Math.pow(Math.random(), 1.6);
-  replaceBoard(() => grid.randomize(density));
+  // Each visible grid draws its own density, biased toward the sparse end,
+  // so Random ranges from a handful of seeds to a crowded board.
+  replaceBoards(() => {
+    for (const life of visibleLifes()) {
+      life.randomize(0.03 + 0.3 * Math.pow(Math.random(), 1.6));
+    }
+  });
 }
 
 /**
- * Swap in a whole new board (Random, riff presets). While playing, the
- * music carries on: voices are reconciled against the new cells — exactly
- * like painting on the grid, just wholesale — and the beat grid, tempo,
- * and chord-progression phase never stop.
+ * Swap in new boards (Random, riff presets). While playing, the music
+ * carries on: voices are reconciled against the new cells — exactly like
+ * painting on the grids, just wholesale — and the beat lattice, tempo, and
+ * chord-progression phase never stop.
  */
-function replaceBoard(mutate) {
+function replaceBoards(mutate) {
   if (!playing) {
     mutate();
-    viewCells = grid.cells;
-    viewGeneration = grid.generation;
+    for (let g = 0; g < MAX_GRIDS; g++) {
+      view[g].cells = lifes[g].cells;
+      view[g].generation = lifes[g].generation;
+    }
     updateGenerationLabel();
     syncHash();
     return;
   }
-  const before = grid.cells.slice();
+  const befores = lifes.map((life) => life.cells.slice());
   mutate();
   const t = audio.now;
-  for (let i = 0; i < grid.cells.length; i++) {
-    if (before[i] === grid.cells[i]) continue;
-    if (grid.cells[i]) {
-      audio.startVoice(i, t, beatCounter);
-      bornAt[i] = t;
-    } else {
-      audio.stopVoice(i, t);
-      diedAt[i] = t;
+  const bar = audio.barAtBeat(masterBeat);
+  for (let g = 0; g < gridCount; g++) {
+    const life = lifes[g];
+    for (let i = 0; i < life.cells.length; i++) {
+      if (befores[g][i] === life.cells[i]) continue;
+      const id = globalId(g, i);
+      if (life.cells[i]) {
+        audio.startVoice(id, t, bar, masterBeat);
+        bornAt[id] = t;
+      } else {
+        audio.stopVoice(id, t);
+        diedAt[id] = t;
+      }
     }
+    view[g].cells = life.cells.slice();
+    view[g].generation = life.generation;
   }
-  // Queued visual snapshots show the old board's future; drop them.
-  beatQueue = [];
-  viewCells = grid.cells.slice();
-  viewGeneration = grid.generation;
+  // Queued visual snapshots show the old boards' future; drop them.
+  frameQueue = [];
   updateGenerationLabel();
 }
 
 function stepOnce() {
   if (playing) return;
-  grid.step();
-  viewCells = grid.cells;
-  viewGeneration = grid.generation;
+  for (const life of visibleLifes()) life.step();
+  for (let g = 0; g < MAX_GRIDS; g++) {
+    view[g].cells = lifes[g].cells;
+    view[g].generation = lifes[g].generation;
+  }
   updateGenerationLabel();
   syncHash();
 }
 
 function updateGenerationLabel() {
-  generationLabel.textContent = `gen ${viewGeneration}`;
+  generationLabel.textContent = `gen ${view[0].generation}`;
+}
+
+function setGridCount(n) {
+  if (n === gridCount) return;
+  // A different grid layout restructures the ensemble: stop, like a mode
+  // change, and let the user restart deliberately.
+  if (playing) pause();
+  gridCount = n;
+  gridButtons.forEach((button, i) => button.classList.toggle("active", i + 1 === n));
+  resize();
+  syncHash();
 }
 
 // ---------------------------------------------------------------------------
-// Shareable URLs: keep the location hash in sync with the (paused) board so
-// the address bar is always a link to the current pattern.
+// Shareable URLs: keep the location hash in sync with the (paused) boards so
+// the address bar is always a link to the current composition.
 
 function syncHash() {
   if (playing) return;
-  if (grid.population === 0) {
+  if (totalPopulation() === 0) {
     history.replaceState(null, "", location.pathname + location.search);
   } else {
-    history.replaceState(null, "", `#${encodeBoard(grid, bpm)}`);
+    history.replaceState(null, "", `#${currentFragment()}`);
   }
+}
+
+function currentFragment() {
+  return encodeBoards(visibleLifes().map((life) => life.cells), COLS, ROWS, bpm);
 }
 
 async function sharePattern() {
   syncHash();
   const url =
-    grid.population === 0
+    totalPopulation() === 0
       ? location.origin + location.pathname + location.search
-      : `${location.origin}${location.pathname}${location.search}#${encodeBoard(grid, bpm)}`;
+      : `${location.origin}${location.pathname}${location.search}#${currentFragment()}`;
   let label = "Link in address bar";
   try {
     await navigator.clipboard.writeText(url);
@@ -303,7 +394,7 @@ async function sharePattern() {
   setTimeout(() => (shareButton.textContent = "Share"), 1400);
 }
 
-/** Restore a pattern shared via the URL hash, centering it if the grid size differs. */
+/** Restore boards shared via the URL hash, centering if the grid size differs. */
 function loadSharedPattern() {
   const shared = decodeFragment(location.hash);
   if (!shared) return;
@@ -312,25 +403,30 @@ function loadSharedPattern() {
     bpmSlider.value = String(bpm);
     bpmValue.textContent = String(bpm);
   }
-  const dc = Math.floor((grid.cols - shared.cols) / 2);
-  const dr = Math.floor((grid.rows - shared.rows) / 2);
-  for (let row = 0; row < shared.rows; row++) {
-    const targetRow = row + dr;
-    if (targetRow < 0 || targetRow >= grid.rows) continue;
-    for (let col = 0; col < shared.cols; col++) {
-      const targetCol = col + dc;
-      if (targetCol < 0 || targetCol >= grid.cols) continue;
-      grid.cells[grid.index(targetCol, targetRow)] = shared.cells[row * shared.cols + col];
+  gridCount = Math.max(1, Math.min(MAX_GRIDS, shared.boards.length));
+  const dc = Math.floor((COLS - shared.cols) / 2);
+  const dr = Math.floor((ROWS - shared.rows) / 2);
+  shared.boards.forEach((cells, g) => {
+    if (g >= MAX_GRIDS) return;
+    const life = lifes[g];
+    for (let row = 0; row < shared.rows; row++) {
+      const targetRow = row + dr;
+      if (targetRow < 0 || targetRow >= ROWS) continue;
+      for (let col = 0; col < shared.cols; col++) {
+        const targetCol = col + dc;
+        if (targetCol < 0 || targetCol >= COLS) continue;
+        life.cells[life.index(targetCol, targetRow)] = cells[row * shared.cols + col];
+      }
     }
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------
-// Layout / rendering
+// Layout / rendering: visible grids share the screen, side by side on wide
+// viewports and stacked on tall ones, each scaled to fit its region.
 
-let cellSize = 0;
-let offsetX = 0;
-let offsetY = 0;
+let layouts = []; // per visible grid: { x0, y0, cellSize, rx, ry, rw, rh }
+let hoverGrid = -1;
 let hoverCell = -1;
 
 function resize() {
@@ -341,89 +437,129 @@ function resize() {
   canvas.style.height = `${window.innerHeight}px`;
   ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  cellSize = Math.min(window.innerWidth / grid.cols, window.innerHeight / grid.rows);
-  offsetX = (window.innerWidth - cellSize * grid.cols) / 2;
-  offsetY = (window.innerHeight - cellSize * grid.rows) / 2;
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const horizontal = W >= H;
+  const gap = gridCount > 1 ? 10 : 0;
+  layouts = [];
+  for (let g = 0; g < gridCount; g++) {
+    const rx = horizontal ? (W / gridCount) * g + gap / 2 : gap / 2;
+    const ry = horizontal ? gap / 2 : (H / gridCount) * g + gap / 2;
+    const rw = (horizontal ? W / gridCount : W) - gap;
+    const rh = (horizontal ? H : H / gridCount) - gap;
+    const cellSize = Math.min(rw / COLS, rh / ROWS);
+    layouts.push({
+      rx,
+      ry,
+      rw,
+      rh,
+      cellSize,
+      x0: rx + (rw - cellSize * COLS) / 2,
+      y0: ry + (rh - cellSize * ROWS) / 2,
+    });
+  }
 }
 
 function cellAt(clientX, clientY) {
-  const col = Math.floor((clientX - offsetX) / cellSize);
-  const row = Math.floor((clientY - offsetY) / cellSize);
-  if (col < 0 || col >= grid.cols || row < 0 || row >= grid.rows) return null;
-  return { col, row };
+  for (let g = 0; g < gridCount; g++) {
+    const l = layouts[g];
+    const col = Math.floor((clientX - l.x0) / l.cellSize);
+    const row = Math.floor((clientY - l.y0) / l.cellSize);
+    if (col >= 0 && col < COLS && row >= 0 && row < ROWS) return { g, col, row };
+  }
+  return null;
 }
 
-function hueOf(cellIndex) {
-  return Math.floor(soundValues[cellIndex] * 360);
+function hueOf(id) {
+  return Math.floor(soundValues[id] * 360);
 }
 
 function render() {
   const now = audio.ctx ? audio.now : performance.now() / 1000;
 
-  // Apply any beat snapshots whose audio time has arrived.
-  while (beatQueue.length > 0 && beatQueue[0].time <= now) {
-    const frame = beatQueue.shift();
-    viewCells = frame.cells;
-    viewGeneration = frame.generation;
-    lastBeatVisualTime = frame.time;
-    for (const i of frame.births) bornAt[i] = frame.time;
-    for (const i of frame.deaths) diedAt[i] = frame.time;
-    updateGenerationLabel();
+  // Apply any step snapshots whose audio time has arrived.
+  while (frameQueue.length > 0 && frameQueue[0].time <= now) {
+    const frame = frameQueue.shift();
+    const v = view[frame.g];
+    v.cells = frame.cells;
+    v.generation = frame.generation;
+    v.lastStepTime = frame.time;
+    for (const i of frame.births) bornAt[globalId(frame.g, i)] = frame.time;
+    for (const i of frame.deaths) diedAt[globalId(frame.g, i)] = frame.time;
+    if (frame.g === 0) updateGenerationLabel();
   }
 
-  const w = window.innerWidth;
-  const h = window.innerHeight;
-  ctx2d.clearRect(0, 0, w, h);
+  ctx2d.clearRect(0, 0, window.innerWidth, window.innerHeight);
 
-  // Beat pulse: everything glows a touch brighter right on the beat.
-  let pulse = 0;
-  if (playing) {
-    const phase = Math.max(0, (now - lastBeatVisualTime) / beatDuration());
-    pulse = Math.max(0, 1 - phase) ** 2;
-  }
+  for (let g = 0; g < gridCount; g++) {
+    const l = layouts[g];
+    if (!l) continue;
+    const v = view[g];
+    const stepSec = STEP_BEATS[g] * beatDuration();
 
-  const pad = Math.max(1, cellSize * 0.08);
-  const size = cellSize - pad * 2;
-  const radius = Math.min(6, size * 0.25);
+    // Step pulse: each grid glows on its own rhythm, so the polyrhythm is
+    // visible as well as audible.
+    let pulse = 0;
+    if (playing) {
+      const phase = Math.max(0, (now - v.lastStepTime) / stepSec);
+      pulse = Math.max(0, 1 - phase) ** 2;
+    }
 
-  for (let row = 0; row < grid.rows; row++) {
-    for (let col = 0; col < grid.cols; col++) {
-      const i = row * grid.cols + col;
-      const x = offsetX + col * cellSize + pad;
-      const y = offsetY + row * cellSize + pad;
-      const alive = viewCells[i] === 1;
-      const hue = hueOf(i);
-      // Percussion cells render desaturated (silver) so drums read at a glance.
-      const perc = audio.kindForCell(i) === "perc";
-      const sat = perc ? 10 : 85;
+    if (gridCount > 1) {
+      // A faint frame and the grid's note value, so the layers read apart.
+      ctx2d.strokeStyle = "rgba(255, 255, 255, 0.1)";
+      ctx2d.lineWidth = 1;
+      roundRect(ctx2d, l.rx + 0.5, l.ry + 0.5, l.rw - 1, l.rh - 1, 10);
+      ctx2d.stroke();
+      ctx2d.fillStyle = `rgba(223, 230, 243, ${0.35 + 0.4 * pulse})`;
+      ctx2d.font = "14px system-ui, sans-serif";
+      ctx2d.fillText(RHYTHM_GLYPHS[g], l.rx + 10, l.ry + 20);
+    }
 
-      if (alive) {
-        const flash = Math.min(1, Math.max(0, 1 - (now - bornAt[i]) / 0.35));
-        const light = 55 + 20 * pulse + 20 * flash;
-        ctx2d.fillStyle = `hsl(${hue} ${sat}% ${Math.min(light, 88)}%)`;
-        roundRect(ctx2d, x, y, size, size, radius);
-        ctx2d.fill();
-      } else {
-        // Death ghost: fade out over a beat instead of vanishing.
-        const ghost = Math.max(0, 1 - (now - diedAt[i]) / (beatDuration() * 0.9));
-        if (ghost > 0) {
-          ctx2d.fillStyle = `hsl(${hue} ${perc ? 8 : 70}% 45% / ${0.35 * ghost})`;
+    const pad = Math.max(0.5, l.cellSize * 0.08);
+    const size = l.cellSize - pad * 2;
+    const radius = Math.min(6, size * 0.25);
+
+    for (let row = 0; row < ROWS; row++) {
+      for (let col = 0; col < COLS; col++) {
+        const i = row * COLS + col;
+        const id = globalId(g, i);
+        const x = l.x0 + col * l.cellSize + pad;
+        const y = l.y0 + row * l.cellSize + pad;
+        const alive = v.cells[i] === 1;
+        const hue = hueOf(id);
+        // Percussion cells render desaturated (silver) so drums read at a glance.
+        const perc = audio.kindForCell(id) === "perc";
+        const sat = perc ? 10 : 85;
+
+        if (alive) {
+          const flash = Math.min(1, Math.max(0, 1 - (now - bornAt[id]) / 0.35));
+          const light = 55 + 20 * pulse + 20 * flash;
+          ctx2d.fillStyle = `hsl(${hue} ${sat}% ${Math.min(light, 88)}%)`;
           roundRect(ctx2d, x, y, size, size, radius);
           ctx2d.fill();
+        } else {
+          // Death ghost: fade out over a step instead of vanishing.
+          const ghost = Math.max(0, 1 - (now - diedAt[id]) / (stepSec * 0.9));
+          if (ghost > 0) {
+            ctx2d.fillStyle = `hsl(${hue} ${perc ? 8 : 70}% 45% / ${0.35 * ghost})`;
+            roundRect(ctx2d, x, y, size, size, radius);
+            ctx2d.fill();
+          }
+          // Dead cells hint at their sound with a faint tinted dot.
+          ctx2d.fillStyle = `hsl(${hue} ${perc ? 8 : 60}% 55% / 0.18)`;
+          const dot = Math.max(1, size * 0.12);
+          ctx2d.beginPath();
+          ctx2d.arc(x + size / 2, y + size / 2, dot, 0, Math.PI * 2);
+          ctx2d.fill();
         }
-        // Dead cells hint at their sound with a faint tinted dot.
-        ctx2d.fillStyle = `hsl(${hue} ${perc ? 8 : 60}% 55% / 0.18)`;
-        const dot = Math.max(1.5, size * 0.12);
-        ctx2d.beginPath();
-        ctx2d.arc(x + size / 2, y + size / 2, dot, 0, Math.PI * 2);
-        ctx2d.fill();
-      }
 
-      if (i === hoverCell) {
-        ctx2d.strokeStyle = `hsl(${hue} 90% 70% / 0.9)`;
-        ctx2d.lineWidth = 1.5;
-        roundRect(ctx2d, x, y, size, size, radius);
-        ctx2d.stroke();
+        if (g === hoverGrid && i === hoverCell) {
+          ctx2d.strokeStyle = `hsl(${hue} 90% 70% / 0.9)`;
+          ctx2d.lineWidth = 1.5;
+          roundRect(ctx2d, x, y, size, size, radius);
+          ctx2d.stroke();
+        }
       }
     }
   }
@@ -446,6 +582,7 @@ function roundRect(c, x, y, w, h, r) {
 
 let painting = false;
 let paintValue = true;
+let paintGrid = 0;
 
 canvas.addEventListener("pointerdown", (e) => {
   dismissIntro();
@@ -453,19 +590,25 @@ canvas.addEventListener("pointerdown", (e) => {
   const cell = cellAt(e.clientX, e.clientY);
   if (!cell) return;
   painting = true;
-  paintValue = grid.get(cell.col, cell.row) !== 1;
-  toggleCell(cell.col, cell.row, paintValue);
+  paintGrid = cell.g;
+  paintValue = lifes[cell.g].get(cell.col, cell.row) !== 1;
+  toggleCell(cell.g, cell.col, cell.row, paintValue);
   canvas.setPointerCapture(e.pointerId);
 });
 
 canvas.addEventListener("pointermove", (e) => {
   const cell = cellAt(e.clientX, e.clientY);
-  hoverCell = cell ? grid.index(cell.col, cell.row) : -1;
-  if (painting && cell) toggleCell(cell.col, cell.row, paintValue);
+  hoverGrid = cell ? cell.g : -1;
+  hoverCell = cell ? lifes[cell.g].index(cell.col, cell.row) : -1;
+  // A paint stroke stays on the grid it started on.
+  if (painting && cell && cell.g === paintGrid) {
+    toggleCell(cell.g, cell.col, cell.row, paintValue);
+  }
 });
 
 canvas.addEventListener("pointerup", () => (painting = false));
 canvas.addEventListener("pointerleave", () => {
+  hoverGrid = -1;
   hoverCell = -1;
   painting = false;
 });
@@ -512,6 +655,11 @@ leadButtons.forEach((button, i) => {
   button.addEventListener("click", () => toggleLead(i));
 });
 
+gridButtons.forEach((button, i) => {
+  button.classList.toggle("active", i + 1 === gridCount);
+  button.addEventListener("click", () => setGridCount(i + 1));
+});
+
 function toggleLead(i) {
   const on = !audio.leadsEnabled[i];
   audio.setLeadEnabled(i, on);
@@ -537,9 +685,10 @@ presetSelect.addEventListener("change", () => {
   const preset = PRESETS[Number(presetSelect.value)];
   if (!preset) return;
   dismissIntro();
-  replaceBoard(() => {
-    grid.clear();
-    stampPreset(grid, preset);
+  // Riffs stamp the primary (quarter-note) grid.
+  replaceBoards(() => {
+    lifes[0].clear();
+    stampPreset(lifes[0], preset);
   });
   // Reset to the placeholder so the same riff can be re-picked later.
   presetSelect.value = "";
@@ -571,6 +720,8 @@ window.addEventListener("keydown", (e) => {
     toggleLead(0);
   } else if (e.key === "L") {
     toggleLead(1);
+  } else if (e.key === "1" || e.key === "2" || e.key === "3") {
+    setGridCount(Number(e.key));
   }
 });
 
@@ -579,6 +730,7 @@ window.addEventListener("resize", resize);
 // ---------------------------------------------------------------------------
 
 loadSharedPattern();
+gridButtons.forEach((button, i) => button.classList.toggle("active", i + 1 === gridCount));
 resize();
 updateGenerationLabel();
 requestAnimationFrame(render);

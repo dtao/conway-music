@@ -94,6 +94,25 @@ Sound sources are tried in order:
    field by its column — travelers like gliders literally move through
    the mix — with a small per-cell gain trim for depth.
 
+### Multiple grids
+
+The **Grids** buttons above the board (keys 1/2/3) run up to three Games
+of Life at once, splitting the screen. Each grid is an independent
+simulation stepping at its own note value against the shared beat clock:
+the first in quarter notes, the second in dotted quarters, the third in
+dotted eighths (`gridRhythms` in `config.js`). Every cell's figure is
+rendered to fit its grid's step, so the same rhythm notation breathes at
+three different paces — a three-layer polyrhythm that realigns every
+three bars.
+
+Harmony stays coherent: in a chord-progression mode, every grid draws
+its notes from the chord sounding when its step begins, so the layers
+follow the changes together no matter how their steps straddle the bar
+lines. Whole-bar pads stay on the quarter-note grid (the rhythmic
+layers trade them for muted plucks), painting works on any grid, Random
+reseeds all visible grids, riffs stamp the first, and shared URLs
+capture every layer.
+
 ### Lead overlays
 
 The **Leads** panel above the grid toggles up to two solo voices that

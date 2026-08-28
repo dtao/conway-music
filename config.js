@@ -29,6 +29,13 @@ window.CONWAY_MUSIC_CONFIG = {
     rows: 22,
   },
 
+  // Up to three grids can run at once, splitting the screen; each is an
+  // independent Game of Life stepping on its own rhythm against the shared
+  // beat clock and chord progression. gridRhythms gives each grid's step
+  // length in beats: quarter notes, dotted quarters, dotted eighths.
+  gridCount: 1,
+  gridRhythms: [1, 1.5, 0.75],
+
   // One Game of Life generation elapses per beat.
   bpm: 96,
 
