@@ -175,7 +175,9 @@ export class AudioEngine {
     if (population > popAvg * 1.05) trend = 1; // growing -> the third
     else if (population < popAvg * 0.95) trend = 2; // shrinking -> the sixth
 
-    const activity = Math.min(1, semitones.length / 10);
+    // A wider activity range than the board usually saturates, so busy vs
+    // sparse boards actually sound different through the leads.
+    const activity = Math.min(1, semitones.length / 24);
 
     for (let i = 0; i < 2; i++) {
       if (!this.leadsEnabled[i]) {
@@ -521,6 +523,8 @@ class LeadOverlay {
     this.ctx = ctx;
     this.profile = profile;
     this.freq = null;
+    this.holdUntil = -Infinity; // notes sustain at least two beats
+    this._level = 0; // last scheduled sustain level (gain anchor fallback)
 
     const real = new Float32Array(profile.harmonics.length);
     const imag = new Float32Array(profile.harmonics);
@@ -558,24 +562,58 @@ class LeadOverlay {
     this.vibrato.start();
   }
 
-  /** Swell toward the activity level and glide to the target pitch. */
+  /**
+   * Per-beat expression. Notes are held at least two beats (half notes
+   * minimum). Each new note gets a phrase arc — a crescendo into the note
+   * over a beat and a quarter, then a relaxed fade toward a sustain level —
+   * so the voice audibly swells and dies away instead of sitting at a
+   * near-constant volume.
+   */
   update(time, hz, activity, beat) {
     const p = this.profile;
-    this.gain.gain.setTargetAtTime(p.level * Math.sqrt(activity), time, p.swell);
+    const shaped = Math.pow(Math.max(0, activity), 0.7);
+    const level = activity <= 0 ? 0 : p.level * (0.2 + 0.8 * shaped);
     this.filter.frequency.setTargetAtTime(
-      p.filterBase + p.filterSpan * Math.sqrt(activity), time, p.swell);
+      p.filterBase + p.filterSpan * shaped, time, p.swell);
 
-    if (hz === null) return; // silent board: hold the pitch, fade out
+    const g = this.gain.gain;
+    const wantsChange =
+      hz !== null && (this.freq === null || Math.abs(hz - this.freq) > 0.5);
 
-    if (this.freq === null) {
-      this.osc.frequency.setValueAtTime(hz, time);
+    if (wantsChange && time >= this.holdUntil) {
+      if (this.freq === null) {
+        this.osc.frequency.setValueAtTime(hz, time);
+      } else {
+        // Portamento to the new note.
+        this.osc.frequency.cancelScheduledValues(time);
+        this.osc.frequency.setValueAtTime(this.freq, time);
+        this.osc.frequency.exponentialRampToValueAtTime(hz, time + Math.min(0.35, beat * 0.8));
+      }
       this.freq = hz;
-    } else if (Math.abs(hz - this.freq) > 0.5) {
-      // Portamento to the new note.
-      this.osc.frequency.cancelScheduledValues(time);
-      this.osc.frequency.setValueAtTime(this.freq, time);
-      this.osc.frequency.exponentialRampToValueAtTime(hz, time + Math.min(0.35, beat * 0.8));
-      this.freq = hz;
+      this.holdUntil = time + 2 * beat;
+
+      // Phrase arc: swell into the new note, then let it relax.
+      this._holdGain(time);
+      g.linearRampToValueAtTime(Math.min(p.level, level * 1.35), time + 1.25 * beat);
+      g.setTargetAtTime(level * 0.7, time + 1.25 * beat, 1.6 * beat);
+      this._level = level * 0.7;
+    } else {
+      // Held note (or silent board): drift toward the activity level,
+      // which fades the voice out entirely when the board goes quiet.
+      this._holdGain(time);
+      g.setTargetAtTime(level * 0.75, time, p.swell * 1.5);
+      this._level = level * 0.75;
+    }
+  }
+
+  /** Freeze the gain at its current value so new ramps start click-free. */
+  _holdGain(time) {
+    const g = this.gain.gain;
+    if (typeof g.cancelAndHoldAtTime === "function") {
+      g.cancelAndHoldAtTime(time);
+    } else {
+      g.cancelScheduledValues(time);
+      g.setValueAtTime(this._level, time);
     }
   }
 
