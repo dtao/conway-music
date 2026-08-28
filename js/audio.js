@@ -953,6 +953,26 @@ export const SOUND_MODES = {
     notes: [0, 1, 2, 3, 4, 5, 6].map((degree) => ({ degree, weight: 1 })),
     sequences: [],
   },
+  aebf: {
+    label: "A–E–B–F♯m",
+    // A major, E major, B major, F# minor — the whole cycle sits in
+    // A lydian (= E major): A B C# D# E F# G#, so no offsets needed.
+    // Degrees: 0=A 1=B 2=C# 3=D# 4=E 5=F# 6=G#.
+    scale: [0, 2, 4, 6, 7, 9, 11],
+    barBeats: 4,
+    progression: [
+      // A: A C# E dominant; G# sparse.
+      { name: "A", pool: [0, 0, 0, 2, 2, 2, 4, 4, 4, 6] },
+      // E: E G# B dominant; F# sparse.
+      { name: "E", pool: [4, 4, 4, 6, 6, 6, 1, 1, 1, 5] },
+      // B: B D# F# dominant; E sparse.
+      { name: "B", pool: [1, 1, 1, 3, 3, 3, 5, 5, 5, 4] },
+      // F#m: F# A C# dominant; G# sparse.
+      { name: "F#m", pool: [5, 5, 5, 0, 0, 0, 2, 2, 2, 6] },
+    ],
+    notes: [0, 1, 2, 3, 4, 5, 6].map((degree) => ({ degree, weight: 1 })),
+    sequences: [],
+  },
   wholetone: {
     label: "Whole-tone dream",
     hidden: true,
