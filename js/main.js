@@ -11,11 +11,11 @@ const DEFAULTS = {
   maxVoices: "auto",
   sequences: [],
   geographic: false,
-  soundMode: "famcg",
+  soundMode: "ema",
   leads: [false, false],
   gridCount: 1,
   gridRhythms: [1, 1.5, 0.75],
-  voiceFamily: "classic",
+  voiceFamily: "eightbit",
   effects: { reverb: true, delay: true, chorus: true },
 };
 

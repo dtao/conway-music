@@ -77,15 +77,15 @@ window.CONWAY_MUSIC_CONFIG = {
   // pads; "eightbit" for pulse waves and triangles. Percussion is shared.
   // Families are data in js/audio.js (VOICE_FAMILIES) — add one there and
   // it appears in the selector automatically.
-  voiceFamily: "classic",
+  voiceFamily: "eightbit",
 
   // Sound mode: which note pool melodic cells draw from. The dropdown
-  // currently offers three chord progressions — "famcg" (F–Am–C–G),
-  // "ema" (Em–A dorian vamp), and "cdbc" (C–D–Bm–C) — while the earlier
-  // scale-field modes (minor, cmajor, edorian, wholetone) remain in the
-  // code marked hidden. Modes are data in js/audio.js (SOUND_MODES): add
-  // one there and it appears in the selector; hidden: true keeps it out.
-  soundMode: "famcg",
+  // offers the chord progressions (famcg, ema, cdbc, camf, gbfa, ddmaa,
+  // aebf); the earlier scale-field modes (minor, cmajor, edorian,
+  // wholetone) remain in the code marked hidden. Modes are data in
+  // js/audio.js (SOUND_MODES): add one there and it appears in the
+  // selector; hidden: true keeps it out.
+  soundMode: "ema",
 
   // Geographic mode: when true, a cell's position shapes its sound — rows
   // pick the register and voice family (sustained pads low, bright bells

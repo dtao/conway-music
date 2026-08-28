@@ -1440,7 +1440,7 @@ const TRIANGLE_HARMONICS = [1, 0, 1 / 9, 0, 1 / 25];
 
 export const VOICE_FAMILIES = {
   classic: {
-    label: "Classic",
+    label: "Original",
     make(role, rng) {
       return { render: role === "muted" ? "pluck" : role, timbre: makeTimbre(role, rng) };
     },
