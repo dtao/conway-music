@@ -22,5 +22,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Pages serves everything with max-age=600 and browsers cache the JS
+      # modules, so stamp the commit SHA into every asset URL (script/css
+      # tags and intra-module imports). A fresh index.html then always
+      # pulls matching, never-stale assets.
+      - name: Stamp asset versions
+        run: |
+          V="${GITHUB_SHA::8}"
+          sed -i "s|src=\"config.js\"|src=\"config.js?v=${V}\"|; s|href=\"css/style.css\"|href=\"css/style.css?v=${V}\"|; s|src=\"js/main.js\"|src=\"js/main.js?v=${V}\"|" index.html
+          sed -i "s|from \"\./\([a-z]*\)\.js\"|from \"./\1.js?v=${V}\"|g" js/*.js
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "Stamp asset versions ${V}"
       - name: Mirror main to gh-pages
         run: git push --force origin HEAD:gh-pages
