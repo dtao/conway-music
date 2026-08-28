@@ -78,6 +78,35 @@ body {
   padding: 0.6rem 1.6rem;
 }
 
+/* ---- top panel (lead voices) ---- */
+
+#toppanel {
+  position: fixed;
+  left: 50%;
+  top: 1rem;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.8rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  z-index: 10;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+}
+
+.panel-label {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+#toppanel button {
+  min-width: 2.2rem;
+}
+
 /* ---- control bar ---- */
 
 #controls {
@@ -134,6 +163,21 @@ button.active {
   color: var(--accent);
   border-color: var(--accent);
   background: rgba(94, 234, 212, 0.12);
+}
+
+/* Collapsed control bar: everything hides except Play and the handle. */
+#controls.collapsed > * {
+  display: none;
+}
+
+#controls.collapsed > #play,
+#controls.collapsed > #collapse {
+  display: inline-block;
+}
+
+#collapse {
+  padding: 0.4rem 0.55rem;
+  color: var(--text-dim);
 }
 
 button.primary {

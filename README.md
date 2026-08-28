@@ -94,18 +94,29 @@ Sound sources are tried in order:
    field by its column — travelers like gliders literally move through
    the mix — with a small per-cell gain trim for depth.
 
-### Lead overlay
+### Lead overlays
 
-The **Lead** toggle (L) adds a monophonic solo voice that floats above
-the grid — a clarinet-ish sustained tone with vibrato. Each beat it takes
-a rolling, recency-weighted average of every note the board is currently
-sounding (an 8-beat window), folds that average into a soloist's
-register, snaps it to the current mode's note pool, and glides there
-with a short portamento. Its volume and brightness track board activity
-through slow ramps, so it swells as the colony blooms and fades as it
-dies back — the board is the orchestra, the overlay plays the melody the
-orchestra implies. On by default (`leadOverlay` in `config.js`);
-synth-mode only, since audio files carry no pitch information.
+The **Leads** panel above the grid toggles up to two solo voices that
+float over the board (lead 1: L, lead 2: shift+L). Each beat the
+conductor takes a rolling, recency-weighted average of every note the
+board is currently sounding (an 8-beat window), folds it into each
+voice's register, snaps it to the current mode's note pool, and glides
+there with a short portamento. Volume and brightness track board
+activity through slow ramps, so the voices swell as the colony blooms
+and fade as it dies back.
+
+Which note a voice sings is chosen deterministically by the board's
+**population trend**: a stable board sings the consensus note itself, a
+growing one the third above, a shrinking one the sixth. When both
+voices are on, lead 2 always takes the next interval in that cycle, so
+the pair harmonizes instead of doubling — lead 1 is a clarinet-ish
+soloist, lead 2 a warmer cello-ish voice an octave lower, panned to the
+other side and slower to swell. Defaults come from `leads` in
+`config.js`; synth-mode only, since audio files carry no pitch
+information.
+
+The bottom control bar collapses (the &#9662; handle) down to just
+Play/Pause when you want the grid unobstructed.
 
 ### Sound modes
 

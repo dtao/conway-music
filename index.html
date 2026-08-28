@@ -22,13 +22,18 @@
     </div>
   </div>
 
+  <div id="toppanel">
+    <span class="panel-label">Leads</span>
+    <button id="lead1" title="Lead 1: a sustained solo voice that follows the board (L)">1</button>
+    <button id="lead2" title="Lead 2: a lower voice that harmonizes with lead 1 (shift+L)">2</button>
+  </div>
+
   <div id="controls">
     <button id="play" class="primary" title="Play / pause (Space)">&#9654; Play</button>
     <select id="presets" title="Load a classic pattern as a riff">
       <option value="">Riffs&hellip;</option>
     </select>
     <select id="mode" title="Sound mode: how sounds are assigned to cells"></select>
-    <button id="lead" title="Lead overlay: a sustained solo voice that follows the board (L)">Lead</button>
     <button id="step" title="Advance one generation (S)">Step</button>
     <button id="random" title="Random pattern (R)">Random</button>
     <button id="clear" title="Clear the grid (C)">Clear</button>
@@ -39,6 +44,7 @@
     </label>
     <span id="generation" title="Generation">gen 0</span>
     <span id="soundbank" title="Where the sounds came from"></span>
+    <button id="collapse" title="Hide controls">&#9662;</button>
   </div>
 
   <script src="config.js"></script>

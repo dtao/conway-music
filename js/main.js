@@ -12,7 +12,7 @@ const DEFAULTS = {
   sequences: [],
   geographic: false,
   soundMode: "minor",
-  leadOverlay: true,
+  leads: [true, false],
 };
 
 const userConfig = window.CONWAY_MUSIC_CONFIG || {};
@@ -72,7 +72,9 @@ const clearButton = document.getElementById("clear");
 const shareButton = document.getElementById("share");
 const presetSelect = document.getElementById("presets");
 const modeSelect = document.getElementById("mode");
-const leadButton = document.getElementById("lead");
+const leadButtons = [document.getElementById("lead1"), document.getElementById("lead2")];
+const collapseButton = document.getElementById("collapse");
+const controlsBar = document.getElementById("controls");
 const bpmSlider = document.getElementById("bpm");
 const bpmValue = document.getElementById("bpm-value");
 const generationLabel = document.getElementById("generation");
@@ -163,7 +165,7 @@ function scheduleBeat(time) {
 
   for (const i of deaths) audio.stopVoice(i, time);
   for (const i of births) audio.startVoice(i, time);
-  audio.overlayBeat(time, bpm);
+  audio.overlayBeat(time, bpm, grid.population);
 
   beatQueue.push({
     time,
@@ -460,15 +462,22 @@ for (const [id, mode] of Object.entries(SOUND_MODES)) {
 }
 modeSelect.value = config.soundMode in SOUND_MODES ? config.soundMode : "minor";
 
-leadButton.classList.toggle("active", config.leadOverlay);
+leadButtons.forEach((button, i) => {
+  button.classList.toggle("active", audio.leadsEnabled[i]);
+  button.addEventListener("click", () => toggleLead(i));
+});
 
-function toggleLead() {
-  const on = !audio.leadEnabled;
-  audio.setLeadEnabled(on);
-  leadButton.classList.toggle("active", on);
+function toggleLead(i) {
+  const on = !audio.leadsEnabled[i];
+  audio.setLeadEnabled(i, on);
+  leadButtons[i].classList.toggle("active", on);
 }
 
-leadButton.addEventListener("click", toggleLead);
+collapseButton.addEventListener("click", () => {
+  const collapsed = controlsBar.classList.toggle("collapsed");
+  collapseButton.innerHTML = collapsed ? "&#9652;" : "&#9662;";
+  collapseButton.title = collapsed ? "Show controls" : "Hide controls";
+});
 
 modeSelect.addEventListener("change", () => {
   const wasPlaying = playing;
@@ -516,8 +525,10 @@ window.addEventListener("keydown", (e) => {
     randomizeBoard();
   } else if (e.key === "c" || e.key === "C") {
     clearBoard();
-  } else if (e.key === "l" || e.key === "L") {
-    toggleLead();
+  } else if (e.key === "l") {
+    toggleLead(0);
+  } else if (e.key === "L") {
+    toggleLead(1);
   }
 });
 

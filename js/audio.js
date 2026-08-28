@@ -37,8 +37,10 @@ export class AudioEngine {
     this.recipes = new Map(); // cell index -> recipe (synth mode)
     this.bufferCache = new Map(); // cell index -> rendered AudioBuffer
     this._synthBpm = null; // non-null => parametric synth mode
-    this.leadEnabled = config.leadOverlay !== false;
-    this._lead = null;
+    const leads = Array.isArray(config.leads) ? config.leads : [true, false];
+    this.leadsEnabled = [!!leads[0], !!leads[1]];
+    this._leads = [null, null];
+    this._leadState = { notes: [], pops: [] };
   }
 
   /** Must be called from a user gesture (browsers gate audio on one). */
@@ -91,35 +93,95 @@ export class AudioEngine {
     this.bufferCache.clear();
   }
 
-  setLeadEnabled(on) {
-    this.leadEnabled = on;
-    if (!on) this._killLead();
+  setLeadEnabled(index, on) {
+    this.leadsEnabled[index] = on;
+    if (!on) this._killLead(index);
   }
 
-  _killLead() {
-    if (!this._lead) return;
-    this._lead.stop(this.now);
-    this._lead = null;
+  _killLead(index) {
+    if (!this._leads[index]) return;
+    this._leads[index].stop(this.ctx ? this.now : 0);
+    this._leads[index] = null;
   }
 
   /**
-   * Per-beat hook for the lead overlay: feed it the semitones the board is
-   * currently sounding. Synth mode only (file buffers carry no pitch data).
+   * Per-beat conductor for the lead overlays. Computes the shared rolling
+   * consensus of what the board is sounding, classifies the population
+   * trend (the deterministic, grid-state-driven harmony selector: stable
+   * boards sing the consensus note, growing ones the third above,
+   * shrinking ones the sixth), and drives each enabled voice. When both
+   * are on, lead 2 always takes the next interval in the cycle, so the
+   * voices harmonize rather than double each other. Synth mode only
+   * (file buffers carry no pitch data).
    */
-  overlayBeat(time, bpm) {
+  overlayBeat(time, bpm, population) {
     if (!this.ctx || !this.usesSynthBank) return;
-    if (!this.leadEnabled) {
-      this._killLead();
+    if (!this.leadsEnabled[0] && !this.leadsEnabled[1]) {
+      this._killLead(0);
+      this._killLead(1);
       return;
     }
-    if (!this._lead) this._lead = new LeadOverlay(this.ctx, this.master);
+
+    const beat = 60 / bpm;
+    const cutoff = time - LEAD_WINDOW_BEATS * beat;
+    const state = this._leadState;
+
     const semitones = [];
     for (const cellIndex of this.voices.keys()) {
       const recipe = this.recipeFor(cellIndex);
       for (const s of recipeSemitones(recipe)) semitones.push(s);
     }
+    state.notes.push({ time, semitones });
+    state.notes = state.notes.filter((h) => h.time > cutoff);
+    state.pops.push({ time, population });
+    state.pops = state.pops.filter((h) => h.time > cutoff);
+
+    // Recency-weighted rolling average of everything in the window.
+    const tau = LEAD_TAU_BEATS * beat;
+    let sum = 0;
+    let weight = 0;
+    for (const h of state.notes) {
+      const w = Math.exp(-(time - h.time) / tau);
+      for (const s of h.semitones) {
+        sum += w * s;
+        weight += w;
+      }
+    }
+    const consensus = weight > 0 ? sum / weight : null;
+
+    // Population trend picks the harmony interval (with hysteresis bands
+    // so it doesn't flap beat to beat).
+    const popAvg = state.pops.reduce((s, h) => s + h.population, 0) / state.pops.length;
+    let trend = 0; // stable -> sing the consensus note
+    if (population > popAvg * 1.05) trend = 1; // growing -> the third
+    else if (population < popAvg * 0.95) trend = 2; // shrinking -> the sixth
+
+    const activity = Math.min(1, semitones.length / 10);
     const mode = SOUND_MODES[this.config.soundMode] || SOUND_MODES.minor;
-    this._lead.update(time, semitones, bpm, mode);
+
+    for (let i = 0; i < 2; i++) {
+      if (!this.leadsEnabled[i]) {
+        this._killLead(i);
+        continue;
+      }
+      const profile = LEAD_PROFILES[i];
+      if (!this._leads[i]) this._leads[i] = new LeadOverlay(this.ctx, this.master, profile);
+
+      let hz = null;
+      if (consensus !== null) {
+        // Lead 2 complements lead 1 by taking the next interval in the
+        // cycle whenever both voices are singing.
+        const intervalIndex =
+          i === 1 && this.leadsEnabled[0] ? (trend + 1) % LEAD_INTERVALS.length : trend;
+        let folded = consensus;
+        while (folded < profile.register[0]) folded += 12;
+        while (folded > profile.register[1]) folded -= 12;
+        const semi = nearestModeSemitone(
+          folded + LEAD_INTERVALS[intervalIndex], mode, profile.octaves);
+        hz = ROOT_HZ * Math.pow(2, semi / 12);
+      }
+      this._leads[i].update(time, hz, activity, beat);
+    }
   }
 
   async _loadBank(bpm) {
@@ -286,7 +348,8 @@ export class AudioEngine {
   stopAllVoices(when = this.now) {
     for (const voice of this.voices.values()) this._fadeOut(voice, when);
     this.voices.clear();
-    this._killLead();
+    this._killLead(0);
+    this._killLead(1);
   }
 
   _fadeOut(voice, when) {
@@ -333,28 +396,60 @@ export class AudioEngine {
 // activity through slow ramps, so it swells and fades like a bowed or blown
 // instrument rather than switching on and off.
 
-const LEAD_LEVEL = 0.22;
 const LEAD_WINDOW_BEATS = 8; // rolling window the average listens to
 const LEAD_TAU_BEATS = 3; // recency half-life-ish decay inside the window
-const LEAD_REGISTER = [24, 45]; // semitones above the root: ~A4 to ~E6
+
+// Harmony intervals in semitones above the consensus note (snapped to the
+// mode afterwards, which resolves each to the scale-correct interval):
+// match, a third up, a sixth up. Which one a voice sings is chosen
+// deterministically by the board's population trend — see overlayBeat.
+const LEAD_INTERVALS = [0, 3.5, 8.5];
+
+// Voice personalities. Lead 1 is a clarinet-ish soloist (odd harmonics);
+// lead 2 is a warmer cello-ish voice an octave below, slower to swell,
+// panned to the other side.
+const LEAD_PROFILES = [
+  {
+    harmonics: [0, 1, 0, 0.4, 0, 0.25, 0, 0.12, 0, 0.06],
+    vibratoRate: 5.3,
+    vibratoDepth: 8,
+    octaves: [2, 3],
+    register: [24, 45], // ~A4 to ~E6
+    level: 0.22,
+    filterBase: 500,
+    filterSpan: 2800,
+    swell: 0.7,
+    pan: 0.18,
+  },
+  {
+    harmonics: [0, 1, 0.55, 0.3, 0.18, 0.12, 0.07],
+    vibratoRate: 4.5,
+    vibratoDepth: 6,
+    octaves: [1, 2],
+    register: [12, 33], // ~A3 to ~E5
+    level: 0.2,
+    filterBase: 350,
+    filterSpan: 1600,
+    swell: 1.0,
+    pan: -0.18,
+  },
+];
 
 class LeadOverlay {
-  constructor(ctx, master) {
+  constructor(ctx, master, profile) {
     this.ctx = ctx;
-    this.history = [];
+    this.profile = profile;
     this.freq = null;
 
-    // Clarinet-ish tone: odd harmonics only.
-    const harmonics = [0, 1, 0, 0.4, 0, 0.25, 0, 0.12, 0, 0.06];
-    const real = new Float32Array(harmonics.length);
-    const imag = new Float32Array(harmonics);
+    const real = new Float32Array(profile.harmonics.length);
+    const imag = new Float32Array(profile.harmonics);
     this.osc = ctx.createOscillator();
     this.osc.setPeriodicWave(ctx.createPeriodicWave(real, imag));
     this.osc.frequency.value = 440;
 
     this.filter = ctx.createBiquadFilter();
     this.filter.type = "lowpass";
-    this.filter.frequency.value = 700;
+    this.filter.frequency.value = profile.filterBase;
     this.filter.Q.value = 1.1;
 
     this.gain = ctx.createGain();
@@ -362,48 +457,34 @@ class LeadOverlay {
 
     // Gentle vibrato on the oscillator's detune (in cents).
     this.vibrato = ctx.createOscillator();
-    this.vibrato.frequency.value = 5.3;
+    this.vibrato.frequency.value = profile.vibratoRate;
     this.vibratoGain = ctx.createGain();
-    this.vibratoGain.gain.value = 8;
+    this.vibratoGain.gain.value = profile.vibratoDepth;
     this.vibrato.connect(this.vibratoGain);
     this.vibratoGain.connect(this.osc.detune);
 
     this.osc.connect(this.filter);
     this.filter.connect(this.gain);
-    this.gain.connect(master);
+    let tail = this.gain;
+    if (typeof ctx.createStereoPanner === "function") {
+      this.panner = ctx.createStereoPanner();
+      this.panner.pan.value = profile.pan;
+      this.gain.connect(this.panner);
+      tail = this.panner;
+    }
+    tail.connect(master);
     this.osc.start();
     this.vibrato.start();
   }
 
-  /** Called once per beat with the semitones the board is sounding now. */
-  update(time, semitones, bpm, mode) {
-    const beat = 60 / bpm;
-    this.history.push({ time, semitones });
-    const cutoff = time - LEAD_WINDOW_BEATS * beat;
-    this.history = this.history.filter((h) => h.time > cutoff);
+  /** Swell toward the activity level and glide to the target pitch. */
+  update(time, hz, activity, beat) {
+    const p = this.profile;
+    this.gain.gain.setTargetAtTime(p.level * Math.sqrt(activity), time, p.swell);
+    this.filter.frequency.setTargetAtTime(
+      p.filterBase + p.filterSpan * Math.sqrt(activity), time, p.swell);
 
-    // Volume and brightness follow activity, on slow expressive ramps.
-    const activity = Math.min(1, semitones.length / 10);
-    this.gain.gain.setTargetAtTime(LEAD_LEVEL * Math.sqrt(activity), time, 0.7);
-    this.filter.frequency.setTargetAtTime(500 + 2800 * Math.sqrt(activity), time, 0.7);
-
-    // Recency-weighted rolling average of everything in the window.
-    const tau = LEAD_TAU_BEATS * beat;
-    let sum = 0;
-    let weight = 0;
-    for (const h of this.history) {
-      const w = Math.exp(-(time - h.time) / tau);
-      for (const s of h.semitones) {
-        sum += w * s;
-        weight += w;
-      }
-    }
-    if (weight === 0) return; // silent board: keep the last pitch, fade out
-
-    let average = sum / weight;
-    while (average < LEAD_REGISTER[0]) average += 12;
-    while (average > LEAD_REGISTER[1]) average -= 12;
-    const hz = ROOT_HZ * Math.pow(2, nearestModeSemitone(average, mode) / 12);
+    if (hz === null) return; // silent board: hold the pitch, fade out
 
     if (this.freq === null) {
       this.osc.frequency.setValueAtTime(hz, time);
@@ -425,11 +506,11 @@ class LeadOverlay {
   }
 }
 
-/** Snap a raw semitone value to the nearest note the mode allows in the lead register. */
-function nearestModeSemitone(target, mode) {
-  let best = LEAD_REGISTER[0];
+/** Snap a raw semitone value to the nearest note the mode allows in the given octaves. */
+function nearestModeSemitone(target, mode, octaves) {
+  let best = octaves[0] * 12;
   let bestDistance = Infinity;
-  for (let octave = 2; octave <= 3; octave++) {
+  for (let octave = octaves[0]; octave <= octaves[1]; octave++) {
     for (const note of mode.notes) {
       if (note.octaves && (octave < note.octaves[0] || octave > note.octaves[1])) continue;
       const semi = octave * 12 + SCALE[note.degree];
