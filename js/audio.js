@@ -58,7 +58,7 @@ export class AudioEngine {
    */
   rebuildSynthBank(bpm) {
     if (!this.usesSynthBank || this._synthBpm === bpm) return;
-    const bank = buildSynthBank(this.ctx, bpm);
+    const bank = buildSynthBank(this.ctx, bpm, this.config.sequences || []);
     this.buffers = bank.buffers;
     this.kinds = bank.kinds;
     this._synthBpm = bpm;
@@ -88,7 +88,7 @@ export class AudioEngine {
       console.warn("Conway Music: no configured audio could be loaded; using synth bank.");
     }
 
-    const bank = buildSynthBank(this.ctx, bpm);
+    const bank = buildSynthBank(this.ctx, bpm, this.config.sequences || []);
     this.buffers = bank.buffers;
     this.kinds = bank.kinds;
     this._synthBpm = bpm;
@@ -210,13 +210,15 @@ export class AudioEngine {
 // dotted eighth, "0110" a sixteenth rest + sixteenth + eighth, and "0010"
 // an offbeat eighth.
 //
-// Composition (196 sounds):
+// Composition (196 sounds + any config.sequences):
 //   84 single notes: plucked strings (Karplus–Strong, 4 octaves) plus muted
 //      plucks, FM bells, soft pads, and chip squares (2 octaves each)
 //   84 two-note pluck figures across the rhythms above, rising/falling by
 //      1–3 scale steps (2nds through 5ths)
 //   14 two-note bell figures
 //   14 percussion patterns: kick, snare, hats, shaker, woodblock, toms
+//   plus composed multi-beat sequences from config.js, written in the pitch
+//      notation parseSequence documents below
 
 const SCALE = [0, 2, 3, 5, 7, 8, 10]; // A natural minor: A B C D E F G
 const ROOT_HZ = 110; // A2
@@ -243,14 +245,54 @@ function parseRhythm(pattern) {
   return notes;
 }
 
-function buildSynthBank(ctx, bpm) {
+/**
+ * Parse melodic sequence notation: one character per sixteenth, where
+ * "1"-"7" starts a note on that scale degree, "-" sustains it, and "."
+ * rests. "'" / "," (which take no grid time) raise / lower the next note
+ * by an octave. Four sixteenths per beat, any length: "3-2-1---" is a
+ * two-beat C-B-A figure. Returns { notes: [{onset, dur, degree}], beats }
+ * with onset/dur measured in beats and degree as an absolute scale index.
+ */
+function parseSequence(seq) {
+  const notes = [];
+  let slots = 0;
+  let octaveShift = 0;
+  const close = () => {
+    const open = notes[notes.length - 1];
+    if (open && open.dur === null) open.dur = slots / 4 - open.onset;
+  };
+  for (const ch of seq) {
+    if (ch === "'") octaveShift++;
+    else if (ch === ",") octaveShift--;
+    else if (ch >= "1" && ch <= "7") {
+      close();
+      // Degree 1 sits one octave above the bank root, a melody register.
+      notes.push({
+        onset: slots / 4,
+        dur: null,
+        degree: (1 + octaveShift) * SCALE.length + (ch.charCodeAt(0) - 49),
+      });
+      octaveShift = 0;
+      slots++;
+    } else if (ch === "-") slots++;
+    else if (ch === ".") {
+      close();
+      slots++;
+    }
+    // Anything else (whitespace, etc.) is ignored.
+  }
+  close();
+  return { notes, beats: Math.max(1, Math.ceil(slots / 4)) };
+}
+
+function buildSynthBank(ctx, bpm, sequences = []) {
   const beat = 60 / bpm;
   const sampleRate = ctx.sampleRate;
   const buffers = [];
   const kinds = [];
 
-  const add = (kind, peak, write) => {
-    const length = Math.max(1, Math.round(sampleRate * beat));
+  const add = (kind, peak, write, beats = 1) => {
+    const length = Math.max(1, Math.round(sampleRate * beat * beats));
     const buffer = ctx.createBuffer(1, length, sampleRate);
     const data = buffer.getChannelData(0);
     write(data, sampleRate);
@@ -328,6 +370,26 @@ function buildSynthBank(ctx, bpm) {
     add("perc", peak, (data, sr) => {
       for (const note of parseRhythm(rhythm)) render(data, sr, note.onset * beat, 0, beat * 0.5);
     });
+  }
+
+  // Composed sequences (config.sequences): multi-beat melodic phrases in
+  // the pitch notation parsed by parseSequence, rendered with a named voice.
+  const SEQUENCE_VOICES = {
+    pluck: [pluck, 0.9],
+    muted: [mutedPluck, 0.7],
+    bell: [bell, 0.75],
+    pad: [pad, 0.6],
+    chip: [chip, 0.55],
+  };
+  for (const entry of sequences) {
+    const [render, peak] = SEQUENCE_VOICES[entry.voice] || SEQUENCE_VOICES.pluck;
+    const { notes, beats } = parseSequence(entry.seq);
+    if (notes.length === 0) continue;
+    add("seq", peak, (data, sr) => {
+      for (const note of notes) {
+        render(data, sr, note.onset * beat, degreeHz(note.degree), note.dur * beat);
+      }
+    }, beats);
   }
 
   return { buffers, kinds };

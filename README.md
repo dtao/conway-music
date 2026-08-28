@@ -96,6 +96,27 @@ Sound sources are tried in order:
    (running sixteenths) for percussion — adding more in `js/audio.js` is a
    one-line change.
 
+## Composed sequences
+
+`config.js` can add multi-beat melodic phrases to the synth bank via
+`sequences`, written in a pitch extension of the rhythm notation — still
+one character per sixteenth:
+
+| Char | Meaning |
+| --- | --- |
+| `1`–`7` | note onset on that scale degree (A minor: 1=A 2=B 3=C 4=D 5=E 6=F 7=G) |
+| `-` | sustain the previous note |
+| `.` | rest |
+| `'` / `,` | raise / lower the next note by an octave (takes no grid time) |
+
+So `3-2-1---` is a two-beat C–B–A figure (two eighths into a half note),
+`1--3--5-` is a 3-3-2 tresillo up an A minor arpeggio, and
+`2-3-1-2-,7-1-,6-,5-` winds down below the root over four beats. Each
+entry names a `voice` (`pluck`, `muted`, `bell`, `pad`, or `chip`).
+Multi-beat sequences loop on their own cycle, so cells carrying them phase
+against one-beat cells. The default config ships fourteen composed
+sequences; generate your own and drop them in.
+
 Sounds are scattered across the grid with a seeded shuffle: the assignment is
 stable across reloads, and each cell's color hue corresponds to its sound, so
 you can compose by color. Clips loop seamlessly while a cell stays alive, so

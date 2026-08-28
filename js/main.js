@@ -9,6 +9,7 @@ const DEFAULTS = {
   bpm: 120,
   assignmentSeed: 42,
   maxVoices: 64,
+  sequences: [],
 };
 
 const userConfig = window.CONWAY_MUSIC_CONFIG || {};
