@@ -133,7 +133,15 @@ export class AudioEngine {
       // Snap the leads to the tones of the chord sounding right now.
       mode = {
         scale: mode.scale,
-        notes: mode.progression[bar].pool.map((degree) => ({ degree, weight: 1 })),
+        notes: mode.progression[bar].pool.map((entry) => {
+          const e = poolEntry(entry);
+          return {
+            degree: e.degree,
+            weight: 1,
+            offset: e.offset,
+            octaves: e.minOctave !== null ? [e.minOctave, 3] : undefined,
+          };
+        }),
       };
     }
 
@@ -356,7 +364,7 @@ export class AudioEngine {
     if (this.usesSynthBank) {
       const recipe = this.recipeFor(cellIndex);
       if (recipe.type === "chord") {
-        const bar = Math.floor(beatIndex / recipe.barBeats) % recipe.barNotes.length;
+        const bar = Math.floor(beatIndex / recipe.barBeats) % recipe.barSemis.length;
         buffer = this.bufferForCell(cellIndex, bar);
         if (recipe.sustain) offset = (beatIndex % recipe.barBeats) * (60 / this._synthBpm);
       } else {
@@ -586,7 +594,7 @@ function nearestModeSemitone(target, mode, octaves) {
   for (let octave = octaves[0]; octave <= octaves[1]; octave++) {
     for (const note of mode.notes) {
       if (note.octaves && (octave < note.octaves[0] || octave > note.octaves[1])) continue;
-      const semi = octave * 12 + (mode.scale || SCALE)[note.degree];
+      const semi = octave * 12 + (mode.scale || SCALE)[note.degree] + (note.offset || 0);
       const distance = Math.abs(semi - target);
       if (distance < bestDistance) {
         bestDistance = distance;
@@ -611,7 +619,7 @@ function semitoneOf(n, scale = SCALE) {
 function recipeSemitones(recipe, bar = 0) {
   const scale = recipe.scale || SCALE;
   if (recipe.type === "chord") {
-    return recipe.barNotes[bar % recipe.barNotes.length].map((d) => semitoneOf(d, scale));
+    return recipe.barSemis[bar % recipe.barSemis.length];
   }
   if (recipe._semitones) return recipe._semitones;
   let semis = [];
@@ -758,6 +766,50 @@ export const SOUND_MODES = {
     notes: [0, 1, 2, 3, 4, 5, 6].map((degree) => ({ degree, weight: 1 })),
     sequences: [],
   },
+  camf: {
+    label: "C–Am–F",
+    // Two bars of C major, one of A minor, one of F major, each triad
+    // joined by a sparse high color tone. Default A natural minor scale;
+    // degrees: 0=A 1=B 2=C 3=D 4=E 5=F 6=G.
+    barBeats: 4,
+    progression: [
+      // C: C E G dominant; high B sparse.
+      { name: "C", pool: [2, 2, 2, 4, 4, 4, 6, 6, 6, { degree: 1, minOctave: 2 }] },
+      { name: "C", pool: [2, 2, 2, 4, 4, 4, 6, 6, 6, { degree: 1, minOctave: 2 }] },
+      // Am: A C E dominant; high B sparse.
+      { name: "Am", pool: [0, 0, 0, 2, 2, 2, 4, 4, 4, { degree: 1, minOctave: 2 }] },
+      // F: F A C dominant; high E sparse.
+      { name: "F", pool: [5, 5, 5, 0, 0, 0, 2, 2, 2, { degree: 4, minOctave: 2 }] },
+    ],
+    notes: [0, 1, 2, 4, 5].map((degree) => ({ degree, weight: 1 })),
+    sequences: [],
+  },
+  gbfa: {
+    label: "G–Bm–F–Am",
+    // G major, B minor, F major, A minor. Needs both F (the F chord) and
+    // F# (the Bm chord), so the Bm pool reaches F# via a semitone offset
+    // on the F degree. Default A natural minor scale.
+    barBeats: 4,
+    progression: [
+      // G: G B D.
+      { name: "G", pool: [6, 1, 3] },
+      // Bm: B D F# dominant; high A sparse.
+      {
+        name: "Bm",
+        pool: [
+          1, 1, 1, 3, 3, 3,
+          { degree: 5, offset: 1 }, { degree: 5, offset: 1 }, { degree: 5, offset: 1 },
+          { degree: 0, minOctave: 2 },
+        ],
+      },
+      // F: F A C dominant; high E sparse.
+      { name: "F", pool: [5, 5, 5, 0, 0, 0, 2, 2, 2, { degree: 4, minOctave: 2 }] },
+      // Am: A C E dominant; high B sparse.
+      { name: "Am", pool: [0, 0, 0, 2, 2, 2, 4, 4, 4, { degree: 1, minOctave: 2 }] },
+    ],
+    notes: [0, 1, 2, 3, 4, 5, 6].map((degree) => ({ degree, weight: 1 })),
+    sequences: [],
+  },
   wholetone: {
     label: "Whole-tone dream",
     hidden: true,
@@ -781,6 +833,18 @@ export const SOUND_MODES = {
     ],
   },
 };
+
+/**
+ * Chord pools list plain degrees, or objects for altered / register-pinned
+ * notes: { degree, minOctave, offset } — `minOctave` lifts the note into at
+ * least that octave (for "high, sparse" color tones), `offset` shifts it by
+ * semitones (for notes outside the mode's scale, e.g. F# over an F scale).
+ */
+function poolEntry(entry) {
+  return typeof entry === "number"
+    ? { degree: entry, minOctave: null, offset: 0 }
+    : { degree: entry.degree, minOctave: entry.minOctave ?? null, offset: entry.offset ?? 0 };
+}
 
 /**
  * Weighted note pick from a mode's pool for a given octave (0-3). When
@@ -891,22 +955,27 @@ export function makeRecipe(cellIndex, config) {
       ? "1000"
       : MELODIC_RHYTHMS[Math.floor(rng() * MELODIC_RHYTHMS.length)];
     const onsets = sustain ? 1 : parseRhythm(rhythm).length;
-    const barNotes = mode.progression.map((chord) => {
-      const notes = [];
+    const scaleArr = mode.scale || SCALE;
+    // Resolve each bar's picks straight to semitones so pool entries can
+    // pin a register (minOctave) or leave the scale (offset).
+    const barSemis = mode.progression.map((chord) => {
+      const semis = [];
       for (let n = 0; n < onsets; n++) {
-        const degree = geo
+        const raw = geo
           ? chord.pool[(col + n) % chord.pool.length]
           : chord.pool[Math.floor(rng() * chord.pool.length)];
-        notes.push(octave * DEGREES + degree);
+        const e = poolEntry(raw);
+        const useOctave = e.minOctave === null ? octave : Math.max(octave, e.minOctave);
+        semis.push(useOctave * 12 + scaleArr[e.degree] + e.offset);
       }
-      return notes;
+      return semis;
     });
     return {
       type: "chord",
       voice,
       rhythm,
       sustain,
-      barNotes,
+      barSemis,
       barBeats: mode.barBeats,
       scale: mode.scale || SCALE,
       detune,
@@ -1004,15 +1073,16 @@ function renderRecipe(ctx, recipe, bpm, bar = 0) {
   } else if (recipe.type === "chord") {
     // One bar's worth: a 1-beat loop of the cell's rhythm on this bar's
     // notes, or a whole-bar sustained note for pads. The engine swaps the
-    // voice onto the next bar's buffer at each bar boundary.
-    const barNotes = recipe.barNotes[bar % recipe.barNotes.length];
+    // voice onto the next bar's buffer at each bar boundary. Chord notes
+    // carry resolved semitones rather than scale degrees.
+    const semis = recipe.barSemis[bar % recipe.barSemis.length];
     if (recipe.sustain) {
       beats = recipe.barBeats;
-      notes = [{ onset: 0, dur: recipe.barBeats, degree: barNotes[0] }];
+      notes = [{ onset: 0, dur: recipe.barBeats, semi: semis[0] }];
     } else {
       notes = parseRhythm(recipe.rhythm).map((n, i) => ({
         ...n,
-        degree: barNotes[Math.min(i, barNotes.length - 1)],
+        semi: semis[Math.min(i, semis.length - 1)],
       }));
     }
   } else {
@@ -1029,9 +1099,13 @@ function renderRecipe(ctx, recipe, bpm, bar = 0) {
   } else {
     const render = MELODIC_VOICES[recipe.voice] || pluck;
     for (const note of notes) {
+      const hz =
+        note.semi !== undefined
+          ? ROOT_HZ * Math.pow(2, note.semi / 12)
+          : degreeHz(note.degree, recipe.scale);
       render(
         data, sampleRate, note.onset * beat,
-        degreeHz(note.degree, recipe.scale) * recipe.detune, note.dur * beat,
+        hz * recipe.detune, note.dur * beat,
         recipe.timbre, rng
       );
     }

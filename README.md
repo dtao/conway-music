@@ -136,6 +136,12 @@ sounding right now. Pads hold one chord tone per bar.
 - **C–D–Bm–C** — a lydian-leaning cycle: C (C E G B, sparse D), D
   (D F♯ A, sparse C), Bm (B D F♯, sparse G and A), back to C (C E G,
   sparse B).
+- **C–Am–F** — two bars of C, one each of Am and F, each triad joined
+  by a sparse color tone pinned to the upper registers (high B over C
+  and Am, high E over F).
+- **G–Bm–F–Am** — mixes F♯ (in Bm) and F natural (in F) via per-note
+  semitone offsets in the chord pools, with sparse high A, E, and B
+  color tones.
 
 Four earlier scale-field modes (A minor field, C major triads, E dorian
 drift, Whole-tone dream) remain in the code marked `hidden: true` —
