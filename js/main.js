@@ -219,15 +219,45 @@ function clearBoard() {
 }
 
 function randomizeBoard() {
-  if (playing) pause();
   // Draw the density fresh each click, biased toward the sparse end, so
   // Random ranges from a handful of seeds to a crowded board.
   const density = 0.03 + 0.3 * Math.pow(Math.random(), 1.6);
-  grid.randomize(density);
-  viewCells = grid.cells;
-  viewGeneration = 0;
+  replaceBoard(() => grid.randomize(density));
+}
+
+/**
+ * Swap in a whole new board (Random, riff presets). While playing, the
+ * music carries on: voices are reconciled against the new cells — exactly
+ * like painting on the grid, just wholesale — and the beat grid, tempo,
+ * and chord-progression phase never stop.
+ */
+function replaceBoard(mutate) {
+  if (!playing) {
+    mutate();
+    viewCells = grid.cells;
+    viewGeneration = grid.generation;
+    updateGenerationLabel();
+    syncHash();
+    return;
+  }
+  const before = grid.cells.slice();
+  mutate();
+  const t = audio.now;
+  for (let i = 0; i < grid.cells.length; i++) {
+    if (before[i] === grid.cells[i]) continue;
+    if (grid.cells[i]) {
+      audio.startVoice(i, t, beatCounter);
+      bornAt[i] = t;
+    } else {
+      audio.stopVoice(i, t);
+      diedAt[i] = t;
+    }
+  }
+  // Queued visual snapshots show the old board's future; drop them.
+  beatQueue = [];
+  viewCells = grid.cells.slice();
+  viewGeneration = grid.generation;
   updateGenerationLabel();
-  syncHash();
 }
 
 function stepOnce() {
@@ -495,25 +525,22 @@ collapseButton.addEventListener("click", () => {
 });
 
 modeSelect.addEventListener("change", () => {
-  const wasPlaying = playing;
+  // A new mode is a new tonal world: stop the music and let the user
+  // restart it deliberately.
   if (playing) pause();
   config.soundMode = modeSelect.value;
   audio.resetRecipes();
   modeSelect.blur();
-  if (wasPlaying) play();
 });
 
 presetSelect.addEventListener("change", () => {
   const preset = PRESETS[Number(presetSelect.value)];
   if (!preset) return;
   dismissIntro();
-  if (playing) pause();
-  grid.clear();
-  stampPreset(grid, preset);
-  viewCells = grid.cells;
-  viewGeneration = 0;
-  updateGenerationLabel();
-  syncHash();
+  replaceBoard(() => {
+    grid.clear();
+    stampPreset(grid, preset);
+  });
   // Reset to the placeholder so the same riff can be re-picked later.
   presetSelect.value = "";
   presetSelect.blur();
