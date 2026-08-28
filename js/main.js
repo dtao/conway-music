@@ -169,6 +169,11 @@ function pause() {
   playing = false;
   clearInterval(schedulerTimer);
   schedulerTimer = null;
+  // A swap still waiting for its beat shouldn't be lost on pause.
+  if (pendingSwaps) {
+    for (const mutate of pendingSwaps) mutate();
+    pendingSwaps = null;
+  }
   frameQueue = [];
   if (audio.ctx) audio.stopAllVoices();
   for (let g = 0; g < MAX_GRIDS; g++) {
@@ -207,9 +212,10 @@ function scheduleAhead() {
 }
 
 function masterTick(time) {
+  if (pendingSwaps) applyPendingSwaps(time);
   audio.overlayBeat(time, bpm, totalPopulation(), masterBeat);
   masterBeat++;
-  if (totalPopulation() === 0) pause();
+  if (totalPopulation() === 0 && !pendingSwaps) pause();
 }
 
 function scheduleStep(g, time, index) {
@@ -294,10 +300,13 @@ function randomizeBoard() {
 
 /**
  * Swap in new boards (Random, riff presets). While playing, the music
- * carries on: voices are reconciled against the new cells — exactly like
- * painting on the grids, just wholesale — and the beat lattice, tempo, and
- * chord-progression phase never stop.
+ * carries on — but the swap is quantized: it takes effect on the next
+ * master beat, both audibly and visually, so formation changes land on
+ * the beat instead of wherever the click happened to fall. The beat
+ * lattice, tempo, and chord-progression phase never stop.
  */
+let pendingSwaps = null; // mutators waiting for the next master beat
+
 function replaceBoards(mutate) {
   if (!playing) {
     mutate();
@@ -309,29 +318,44 @@ function replaceBoards(mutate) {
     syncHash();
     return;
   }
+  (pendingSwaps ??= []).push(mutate);
+}
+
+/** Apply queued board swaps at master-beat time `time` (called ahead of it). */
+function applyPendingSwaps(time) {
+  const swaps = pendingSwaps;
+  pendingSwaps = null;
   const befores = lifes.map((life) => life.cells.slice());
-  mutate();
-  const t = audio.now;
+  for (const mutate of swaps) mutate();
   const bar = audio.barAtBeat(masterBeat);
   for (let g = 0; g < gridCount; g++) {
     const life = lifes[g];
+    const births = [];
+    const deaths = [];
     for (let i = 0; i < life.cells.length; i++) {
       if (befores[g][i] === life.cells[i]) continue;
       const id = globalId(g, i);
       if (life.cells[i]) {
-        audio.startVoice(id, t, bar, masterBeat);
-        bornAt[id] = t;
+        audio.startVoice(id, time, bar, masterBeat);
+        births.push(i);
       } else {
-        audio.stopVoice(id, t);
-        diedAt[id] = t;
+        audio.stopVoice(id, time);
+        deaths.push(i);
       }
     }
-    view[g].cells = life.cells.slice();
-    view[g].generation = life.generation;
+    // The display flips on the beat too, via the ordinary snapshot queue.
+    frameQueue.push({
+      g,
+      time,
+      generation: life.generation,
+      cells: life.cells.slice(),
+      births,
+      deaths,
+    });
+    // Give the new formation its full first step on every grid before it
+    // starts evolving (its next step re-announces instead of stepping).
+    firstStepPending[g] = true;
   }
-  // Queued visual snapshots show the old boards' future; drop them.
-  frameQueue = [];
-  updateGenerationLabel();
 }
 
 function stepOnce() {
