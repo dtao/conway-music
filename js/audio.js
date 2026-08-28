@@ -513,7 +513,7 @@ function nearestModeSemitone(target, mode, octaves) {
   for (let octave = octaves[0]; octave <= octaves[1]; octave++) {
     for (const note of mode.notes) {
       if (note.octaves && (octave < note.octaves[0] || octave > note.octaves[1])) continue;
-      const semi = octave * 12 + SCALE[note.degree];
+      const semi = octave * 12 + (mode.scale || SCALE)[note.degree];
       const distance = Math.abs(semi - target);
       if (distance < bestDistance) {
         bestDistance = distance;
@@ -525,21 +525,22 @@ function nearestModeSemitone(target, mode, octaves) {
 }
 
 /** Absolute scale degree -> semitones above the root. */
-function semitoneOf(n) {
+function semitoneOf(n, scale = SCALE) {
   const octave = Math.floor(n / DEGREES);
   const degree = ((n % DEGREES) + DEGREES) % DEGREES;
-  return octave * 12 + SCALE[degree];
+  return octave * 12 + scale[degree];
 }
 
 /** The semitones a recipe sounds (memoized on the recipe; percussion: none). */
 function recipeSemitones(recipe) {
   if (recipe._semitones) return recipe._semitones;
+  const scale = recipe.scale || SCALE;
   let semis = [];
   if (recipe.type === "melodic") {
-    semis = recipe.degrees.map(semitoneOf);
+    semis = recipe.degrees.map((d) => semitoneOf(d, scale));
   } else if (recipe.type === "seq") {
     semis = parseSequence(recipe.seq).notes.map((n) =>
-      semitoneOf(n.degree + recipe.octaveShift * DEGREES));
+      semitoneOf(n.degree + recipe.octaveShift * DEGREES, scale));
   }
   recipe._semitones = semis;
   return semis;
@@ -554,10 +555,12 @@ const SCALE = [0, 2, 3, 5, 7, 8, 10]; // A natural minor: A B C D E F G
 const ROOT_HZ = 110; // A2
 const DEGREES = SCALE.length;
 
-// Sound modes: each mode is a weighted pool of scale degrees (0=A 1=B 2=C
-// 3=D 4=E 5=F 6=G) that melodic material draws from, plus the composed
-// sequences it uses ("config" = the config.js sequences). `octaves`
-// restricts a note to a register. Add a mode here and it appears in the UI.
+// Sound modes: each mode is a weighted pool of scale degrees that melodic
+// material draws from, plus the composed sequences it uses ("config" = the
+// config.js sequences). `octaves` restricts a note to a register. A mode
+// may carry its own `scale` (7 semitone offsets from the A root) to reach
+// notes outside A natural minor; degrees index into that scale. Add a mode
+// here and it appears in the UI.
 export const SOUND_MODES = {
   minor: {
     label: "A minor field",
@@ -586,6 +589,34 @@ export const SOUND_MODES = {
       { voice: "pad", seq: "3---5---7-------" },
       { voice: "pluck", seq: "3-4-5---" }, // passing D
       { voice: "pluck", seq: "5-3-1---" }, // E C A
+    ],
+  },
+  edorian: {
+    label: "E dorian drift",
+    // A-rooted scale reaching outside natural minor: A B C# D E F# G.
+    // Degrees here: 0=A 1=B 2=C# 3=D 4=E 5=F# 6=G.
+    scale: [0, 2, 4, 5, 7, 9, 10],
+    notes: [
+      { degree: 4, weight: 6 }, // E
+      { degree: 6, weight: 6 }, // G
+      { degree: 1, weight: 6 }, // B
+      { degree: 5, weight: 2, octaves: [2, 3] }, // F#, high and sparse
+      { degree: 2, weight: 2, octaves: [2, 3] }, // C#, high and sparse
+      { degree: 3, weight: 2, octaves: [2, 3] }, // D, high and sparse
+      // A sits this mode out.
+    ],
+    // Notation degrees in this scale: 2=B 3=C# 4=D 5=E 6=F# 7=G.
+    sequences: [
+      { voice: "pluck", seq: "5-7-'2--" }, // E G B rise
+      { voice: "pluck", seq: "'2-7-5---" }, // B G E fall
+      { voice: "pluck", seq: "5-'2-7-5-" },
+      { voice: "pluck", seq: "7-5-2---" },
+      { voice: "muted", seq: "5--7--'2-" }, // E G B tresillo
+      { voice: "bell", seq: "'3-'2-----" }, // high C# resolving to B
+      { voice: "bell", seq: "'4-'2-7---" }, // high D falling home
+      { voice: "bell", seq: "5--75--7" },
+      { voice: "chip", seq: "5.7.'2.7." },
+      { voice: "pad", seq: "5---7---'2------" },
     ],
   },
 };
@@ -675,6 +706,7 @@ export function makeRecipe(cellIndex, config) {
       type: "seq",
       voice,
       seq: entry.seq,
+      scale: mode.scale || SCALE,
       octaveShift,
       detune,
       timbre: makeTimbre(voice, rng),
@@ -700,6 +732,7 @@ export function makeRecipe(cellIndex, config) {
     type: "melodic",
     voice,
     degrees: isDuet ? [base, pickNote(rng, mode, octave)] : [base],
+    scale: mode.scale || SCALE,
     rhythm,
     detune,
     timbre: makeTimbre(voice, rng),
@@ -746,10 +779,10 @@ export function mulberry32(seed) {
 // Rendering: recipe -> AudioBuffer at a given tempo.
 
 /** Frequency of the nth scale degree above (or below) the root. */
-function degreeHz(n) {
+function degreeHz(n, scale = SCALE) {
   const octave = Math.floor(n / DEGREES);
   const degree = ((n % DEGREES) + DEGREES) % DEGREES;
-  return ROOT_HZ * Math.pow(2, octave + SCALE[degree] / 12);
+  return ROOT_HZ * Math.pow(2, octave + scale[degree] / 12);
 }
 
 const MELODIC_VOICES = { pluck, muted: pluck, bell, pad, chip };
@@ -787,7 +820,7 @@ function renderRecipe(ctx, recipe, bpm) {
     for (const note of notes) {
       render(
         data, sampleRate, note.onset * beat,
-        degreeHz(note.degree) * recipe.detune, note.dur * beat,
+        degreeHz(note.degree, recipe.scale) * recipe.detune, note.dur * beat,
         recipe.timbre, rng
       );
     }

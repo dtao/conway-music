@@ -128,11 +128,17 @@ switches the note pool melodic cells draw from:
   from the weighted pool, so C–E / E–G / G–C figures dominate), with
   sparse D and A, B only in the top two octaves, no F, and its own pool
   of triadic composed sequences.
+- **E dorian drift** — dominated by E, G, and B, with F♯, C♯, and D
+  appearing sparsely and only in the upper registers. F♯ and C♯ live
+  outside A natural minor, so this mode carries its own scale.
 
 Modes are pure data (`SOUND_MODES` in `js/audio.js`): a weighted list of
-scale degrees with optional register restrictions plus a sequence pool.
-Add an entry there and it appears in the selector automatically. Every
-cell remains unique in every mode.
+scale degrees with optional register restrictions, a sequence pool, and
+optionally a mode-specific `scale` (7 semitone offsets from the A root)
+for notes outside the default A natural minor. Add an entry there and it
+appears in the selector automatically. Every cell remains unique in
+every mode, and the lead overlays follow whichever scale the mode
+defines.
 
 ### Geographic mode
 
