@@ -252,8 +252,14 @@ function governorCheck() {
   governor.longFrames = 0;
 }
 
+// Shown as "sounding / cap": how many voices are actually playing right
+// now against the governor's polyphony budget.
+let lastVoiceLabel = "";
 function updateBankLabel() {
-  soundbankLabel.textContent = `${audio.bankLabel} · ${audio.maxVoices} voices`;
+  const label = `${audio.bankLabel} · ${audio.voices.size}/${audio.maxVoices} voices`;
+  if (label === lastVoiceLabel) return;
+  lastVoiceLabel = label;
+  soundbankLabel.textContent = label;
 }
 
 function scheduleStep(g, time, index) {
@@ -548,6 +554,7 @@ function render() {
     governor.longFrames++;
   }
   governor.lastFrameTs = frameTs;
+  if (audio.ctx) updateBankLabel();
 
   // Apply any step snapshots whose audio time has arrived.
   while (frameQueue.length > 0 && frameQueue[0].time <= now) {
