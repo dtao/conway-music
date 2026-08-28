@@ -1,23 +1,42 @@
-// Audio engine: loads the developer-configured sound bank (explicit file
-// list or JSON manifest), falling back to a synthesized bank of plucks,
-// bells, pads, chip tones, two-note figures, and percussion, and manages
-// one looping voice per living cell.
+// Audio engine. Two modes:
+//
+// - File mode: the developer configured audio files (explicit list or JSON
+//   manifest); cells map onto the loaded buffers.
+//
+// - Parametric synth mode (the zero-setup fallback): every cell gets its own
+//   synthesis recipe, deterministically derived from the assignment seed, so
+//   no two cells sound alike. A recipe picks a category (melodic figure,
+//   composed sequence from config.sequences, or percussion), a voice, pitch
+//   material on the A natural minor scale, a rhythm, and continuous timbre
+//   parameters (string damping, FM ratio, pulse width, envelope speeds, a few
+//   cents of detune, and a unique noise seed). Buffers are rendered lazily on
+//   a cell's first birth and kept in a capped cache; a tempo change clears
+//   the cache so every figure re-renders to fit the new beat.
+//
+// With config.geographic enabled, position shapes the recipe: row picks the
+// register and voice family (low sustained voices at the bottom, bright ones
+// at the top), percussion gathers in the bottom rows, and the scale degree
+// follows the column so horizontal motion reads as melodic motion.
 
 const ATTACK = 0.008;
 const RELEASE = 0.05;
 const VOICE_GAIN = 0.28;
+const MAX_CACHED_BUFFERS = 256;
 
 export class AudioEngine {
-  constructor(config) {
+  constructor(config, cellValues) {
     this.config = config;
+    this.cellValues = cellValues; // per-cell [0,1) values (hue + file mapping)
+    this.cellCount = config.grid.cols * config.grid.rows;
     this.ctx = null;
     this.master = null;
-    this.buffers = [];
-    this.kinds = []; // parallel to buffers: "pluck", "bell", "perc", "file", ...
     this.bankLabel = "";
     this.voices = new Map(); // cell index -> { source, gain, startedAt }
     this.maxVoices = config.maxVoices || 64;
-    this._synthBpm = null; // non-null when the built-in synth bank is active
+    this.fileBuffers = null; // non-null => file mode
+    this.recipes = new Map(); // cell index -> recipe (synth mode)
+    this.bufferCache = new Map(); // cell index -> rendered AudioBuffer
+    this._synthBpm = null; // non-null => parametric synth mode
   }
 
   /** Must be called from a user gesture (browsers gate audio on one). */
@@ -50,17 +69,14 @@ export class AudioEngine {
   }
 
   /**
-   * The synth bank's rhythmic figures are rendered to fit exactly one beat,
-   * so it must be rebuilt when the tempo changes. Call while no looping
-   * voices are active (i.e. before starting playback). No-ops for file banks
-   * and unchanged tempos; the bank's size and ordering are stable across
-   * rebuilds, so cell-to-sound assignments are preserved.
+   * Synth buffers are rendered to fit whole beats, so a tempo change
+   * invalidates them. Call while no looping voices are active (i.e. before
+   * starting playback); recipes are untouched, so every cell keeps its
+   * sound identity.
    */
   rebuildSynthBank(bpm) {
     if (!this.usesSynthBank || this._synthBpm === bpm) return;
-    const bank = buildSynthBank(this.ctx, bpm, this.config.sequences || []);
-    this.buffers = bank.buffers;
-    this.kinds = bank.kinds;
+    this.bufferCache.clear();
     this._synthBpm = bpm;
   }
 
@@ -79,20 +95,17 @@ export class AudioEngine {
 
     if (urls && urls.length > 0) {
       const buffers = await Promise.all(urls.map((u) => this._fetchBuffer(u)));
-      this.buffers = buffers.filter(Boolean);
-      if (this.buffers.length > 0) {
-        this.kinds = this.buffers.map(() => "file");
-        this.bankLabel += ` (${this.buffers.length} sounds)`;
+      const loaded = buffers.filter(Boolean);
+      if (loaded.length > 0) {
+        this.fileBuffers = loaded;
+        this.bankLabel += ` (${loaded.length} sounds)`;
         return;
       }
-      console.warn("Conway Music: no configured audio could be loaded; using synth bank.");
+      console.warn("Conway Music: no configured audio could be loaded; using synth.");
     }
 
-    const bank = buildSynthBank(this.ctx, bpm, this.config.sequences || []);
-    this.buffers = bank.buffers;
-    this.kinds = bank.kinds;
     this._synthBpm = bpm;
-    this.bankLabel = `built-in synth (${this.buffers.length} sounds)`;
+    this.bankLabel = `parametric synth (${this.cellCount} unique cells)`;
   }
 
   async _fetchManifest(url) {
@@ -121,16 +134,57 @@ export class AudioEngine {
     }
   }
 
-  bufferForSound(soundIndex) {
-    return this.buffers[soundIndex % this.buffers.length];
+  recipeFor(cellIndex) {
+    let recipe = this.recipes.get(cellIndex);
+    if (!recipe) {
+      recipe = makeRecipe(cellIndex, this.config);
+      this.recipes.set(cellIndex, recipe);
+    }
+    return recipe;
+  }
+
+  /**
+   * The cell's sound category ("perc", "melodic", "seq", or "file"), for
+   * rendering hints. Null until the bank mode is known (pre-init).
+   */
+  kindForCell(cellIndex) {
+    if (this.fileBuffers) return "file";
+    if (!this.usesSynthBank) return null;
+    return this.recipeFor(cellIndex).type;
+  }
+
+  bufferForCell(cellIndex) {
+    if (this.fileBuffers) {
+      const i = Math.floor(this.cellValues[cellIndex] * this.fileBuffers.length);
+      return this.fileBuffers[i % this.fileBuffers.length];
+    }
+    let buffer = this.bufferCache.get(cellIndex);
+    if (!buffer) {
+      buffer = renderRecipe(this.ctx, this.recipeFor(cellIndex), this._synthBpm);
+      this._cacheBuffer(cellIndex, buffer);
+    }
+    return buffer;
+  }
+
+  _cacheBuffer(cellIndex, buffer) {
+    if (this.bufferCache.size >= MAX_CACHED_BUFFERS) {
+      // Evict the oldest cached buffer that isn't currently sounding.
+      for (const key of this.bufferCache.keys()) {
+        if (!this.voices.has(key)) {
+          this.bufferCache.delete(key);
+          break;
+        }
+      }
+    }
+    this.bufferCache.set(cellIndex, buffer);
   }
 
   /** Start a cell's looping voice at audio-clock time `when`. */
-  startVoice(cellIndex, soundIndex, when) {
+  startVoice(cellIndex, when) {
     if (this.voices.has(cellIndex)) return;
     if (this.voices.size >= this.maxVoices) this._stealOldestVoice(when);
 
-    const buffer = this.bufferForSound(soundIndex);
+    const buffer = this.bufferForCell(cellIndex);
     if (!buffer) return;
 
     const source = this.ctx.createBufferSource();
@@ -182,8 +236,8 @@ export class AudioEngine {
   }
 
   /** One-shot (non-looping) playback, used to preview a cell's sound. */
-  preview(soundIndex) {
-    const buffer = this.bufferForSound(soundIndex);
+  preview(cellIndex) {
+    const buffer = this.bufferForCell(cellIndex);
     if (!buffer) return;
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
@@ -197,42 +251,200 @@ export class AudioEngine {
 }
 
 // ---------------------------------------------------------------------------
-// Built-in synth bank
-//
-// Every buffer is rendered to last exactly one beat, so figures with internal
-// rhythm (two-note runs, offbeat percussion) stay locked to the grid when a
-// cell loops. All melodic material stays on the A natural minor scale.
-//
-// Rhythms use a sixteenth-grid notation: 4 characters per beat, where each
-// "1" starts a note that sustains until the next "1" or the end of the beat,
-// and leading "0"s are rest. So "1000" is a quarter note, "1010" two
-// eighths, "1001" a dotted eighth + sixteenth, "1100" a sixteenth into a
-// dotted eighth, "0110" a sixteenth rest + sixteenth + eighth, and "0010"
-// an offbeat eighth.
-//
-// Composition (196 sounds + any config.sequences):
-//   84 single notes: plucked strings (Karplus–Strong, 4 octaves) plus muted
-//      plucks, FM bells, soft pads, and chip squares (2 octaves each)
-//   84 two-note pluck figures across the rhythms above, rising/falling by
-//      1–3 scale steps (2nds through 5ths)
-//   14 two-note bell figures
-//   14 percussion patterns: kick, snare, hats, shaker, woodblock, toms
-//   plus composed multi-beat sequences from config.js, written in the pitch
-//      notation parseSequence documents below
+// Recipes: a cell's deterministic synthesis parameters. Pure data — no
+// AudioContext involved — so they're cheap, testable, and stable across
+// tempo changes.
 
 const SCALE = [0, 2, 3, 5, 7, 8, 10]; // A natural minor: A B C D E F G
 const ROOT_HZ = 110; // A2
+const DEGREES = SCALE.length;
+
+const MELODIC_RHYTHMS = ["1000", "1010", "1001", "1100", "0110"];
+const PERC_RHYTHMS = ["1000", "1010", "1001", "1100", "0110", "0010", "1111"];
+const PERC_INSTRUMENTS = [
+  ["kick", 1.0], ["snare", 0.8], ["hat", 0.45],
+  ["shaker", 0.35], ["block", 0.6], ["tom", 0.85],
+];
+const VOICE_PEAKS = { pluck: 0.9, muted: 0.7, bell: 0.75, pad: 0.6, chip: 0.55 };
+const VOICE_POOL = ["pluck", "pluck", "muted", "bell", "bell", "pad", "chip"];
+
+// Geographic row bands, bottom to top: [voice choices, octave]
+const GEO_BANDS = [
+  [["pad", "muted"], 0],
+  [["pluck", "muted"], 1],
+  [["pluck", "bell"], 2],
+  [["bell", "chip"], 3],
+];
+
+export function makeRecipe(cellIndex, config) {
+  const rng = mulberry32((config.assignmentSeed * 0x9e3779b9) ^ (cellIndex * 0x85ebca6b));
+  const geo = !!config.geographic;
+  const cols = config.grid.cols;
+  const rows = config.grid.rows;
+  const row = Math.floor(cellIndex / cols);
+  const col = cellIndex % cols;
+  const height = rows > 1 ? 1 - row / (rows - 1) : 0.5; // 0 bottom, 1 top
+  const band = GEO_BANDS[Math.min(3, Math.floor(height * 4))];
+  const sequences = config.sequences || [];
+
+  const noiseSeed = Math.floor(rng() * 0x7fffffff);
+  const detune = Math.pow(2, ((rng() * 2 - 1) * 10) / 1200); // ±10 cents
+
+  // Category: percussion gathers in the bottom rows when geographic.
+  const percProb = geo ? (row >= rows - 2 ? 0.5 : 0.02) : 0.1;
+  const seqProb = sequences.length > 0 ? 0.15 : 0;
+  const roll = rng();
+
+  if (roll < percProb) {
+    const [instrument, peak] = PERC_INSTRUMENTS[Math.floor(rng() * PERC_INSTRUMENTS.length)];
+    return {
+      type: "perc",
+      instrument,
+      rhythm: PERC_RHYTHMS[Math.floor(rng() * PERC_RHYTHMS.length)],
+      pitch: 0.8 + rng() * 0.5,
+      decay: 0.8 + rng() * 0.5,
+      peak,
+      noiseSeed,
+    };
+  }
+
+  if (roll < percProb + seqProb) {
+    const entry = sequences[Math.floor(rng() * sequences.length)];
+    const octaveShift = geo
+      ? Math.max(-1, Math.min(1, band[1] - 1))
+      : [-1, 0, 0, 1][Math.floor(rng() * 4)];
+    const voice = entry.voice in VOICE_PEAKS ? entry.voice : "pluck";
+    return {
+      type: "seq",
+      voice,
+      seq: entry.seq,
+      octaveShift,
+      detune,
+      timbre: makeTimbre(voice, rng),
+      peak: VOICE_PEAKS[voice],
+      noiseSeed,
+    };
+  }
+
+  // Melodic figure: a single note or a two-note duet.
+  const voice = geo
+    ? band[0][Math.floor(rng() * band[0].length)]
+    : VOICE_POOL[Math.floor(rng() * VOICE_POOL.length)];
+  const octave = geo ? band[1] : Math.floor(rng() * 4);
+  const degree = geo ? col % DEGREES : Math.floor(rng() * DEGREES);
+  const base = octave * DEGREES + degree;
+  const isDuet = rng() < 0.5;
+  const steps = isDuet ? (1 + Math.floor(rng() * 3)) * (rng() < 0.5 ? 1 : -1) : 0;
+  const rhythm = isDuet
+    ? MELODIC_RHYTHMS[1 + Math.floor(rng() * (MELODIC_RHYTHMS.length - 1))]
+    : "1000";
+  return {
+    type: "melodic",
+    voice,
+    degrees: isDuet ? [base, base + steps] : [base],
+    rhythm,
+    detune,
+    timbre: makeTimbre(voice, rng),
+    peak: VOICE_PEAKS[voice],
+    noiseSeed,
+  };
+}
+
+/** Continuous per-cell timbre parameters for a melodic voice. */
+function makeTimbre(voice, rng) {
+  switch (voice) {
+    case "pluck":
+      return { damping: 0.994 + rng() * 0.004, smooth: 1 };
+    case "muted":
+      return { damping: 0.988 + rng() * 0.006, smooth: 2 + Math.floor(rng() * 3) };
+    case "bell":
+      return { ratio: 2.5 + rng() * 2, index: 2 + rng() * 4, decayFrac: 0.25 + rng() * 0.2 };
+    case "pad":
+      return {
+        harmonics: [1, 0.2 + rng() * 0.5, 0.05 + rng() * 0.3, 0.02 + rng() * 0.15],
+        attackFrac: 0.1 + rng() * 0.2,
+        releaseFrac: 0.15 + rng() * 0.2,
+      };
+    case "chip":
+      return { width: 0.15 + rng() * 0.35, decayFrac: 0.3 + rng() * 0.3 };
+    default:
+      return {};
+  }
+}
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Rendering: recipe -> AudioBuffer at a given tempo.
 
 /** Frequency of the nth scale degree above (or below) the root. */
 function degreeHz(n) {
-  const octave = Math.floor(n / SCALE.length);
-  const degree = ((n % SCALE.length) + SCALE.length) % SCALE.length;
+  const octave = Math.floor(n / DEGREES);
+  const degree = ((n % DEGREES) + DEGREES) % DEGREES;
   return ROOT_HZ * Math.pow(2, octave + SCALE[degree] / 12);
 }
 
+const MELODIC_VOICES = { pluck, muted: pluck, bell, pad, chip };
+const PERC_VOICES = { kick, snare, hat, shaker, block, tom };
+
+function renderRecipe(ctx, recipe, bpm) {
+  const beat = 60 / bpm;
+  const sampleRate = ctx.sampleRate;
+  const rng = mulberry32(recipe.noiseSeed);
+
+  let beats = 1;
+  let notes;
+  if (recipe.type === "seq") {
+    const parsed = parseSequence(recipe.seq);
+    beats = parsed.beats;
+    notes = parsed.notes.map((n) => ({ ...n, degree: n.degree + recipe.octaveShift * DEGREES }));
+  } else if (recipe.type === "melodic") {
+    notes = parseRhythm(recipe.rhythm).map((n, i) => ({
+      ...n,
+      degree: recipe.degrees[Math.min(i, recipe.degrees.length - 1)],
+    }));
+  } else {
+    notes = parseRhythm(recipe.rhythm);
+  }
+
+  const length = Math.max(1, Math.round(sampleRate * beat * beats));
+  const buffer = ctx.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+
+  if (recipe.type === "perc") {
+    const render = PERC_VOICES[recipe.instrument];
+    for (const note of notes) render(data, sampleRate, note.onset * beat, recipe, rng);
+  } else {
+    const render = MELODIC_VOICES[recipe.voice] || pluck;
+    for (const note of notes) {
+      render(
+        data, sampleRate, note.onset * beat,
+        degreeHz(note.degree) * recipe.detune, note.dur * beat,
+        recipe.timbre, rng
+      );
+    }
+  }
+
+  normalize(data, recipe.peak);
+  edgeFade(data, sampleRate);
+  return buffer;
+}
+
+// ---- notation parsers -----------------------------------------------------
+
 /**
  * Parse "1010"-style rhythm notation into note onsets/durations as
- * fractions of a beat.
+ * fractions of a beat: each "1" starts a note that sustains until the next
+ * "1" or the end of the beat; leading "0"s are rest.
  */
 function parseRhythm(pattern) {
   const notes = [];
@@ -270,7 +482,7 @@ function parseSequence(seq) {
       notes.push({
         onset: slots / 4,
         dur: null,
-        degree: (1 + octaveShift) * SCALE.length + (ch.charCodeAt(0) - 49),
+        degree: (1 + octaveShift) * DEGREES + (ch.charCodeAt(0) - 49),
       });
       octaveShift = 0;
       slots++;
@@ -285,135 +497,19 @@ function parseSequence(seq) {
   return { notes, beats: Math.max(1, Math.ceil(slots / 4)) };
 }
 
-function buildSynthBank(ctx, bpm, sequences = []) {
-  const beat = 60 / bpm;
-  const sampleRate = ctx.sampleRate;
-  const buffers = [];
-  const kinds = [];
-
-  const add = (kind, peak, write, beats = 1) => {
-    const length = Math.max(1, Math.round(sampleRate * beat * beats));
-    const buffer = ctx.createBuffer(1, length, sampleRate);
-    const data = buffer.getChannelData(0);
-    write(data, sampleRate);
-    normalize(data, peak);
-    edgeFade(data, sampleRate);
-    buffers.push(buffer);
-    kinds.push(kind);
-  };
-
-  // A figure maps scale degrees onto a rhythm's onsets, one per note.
-  const figure = (kind, peak, render, degrees, rhythm) =>
-    add(kind, peak, (data, sr) => {
-      parseRhythm(rhythm).forEach((note, n) => {
-        const degree = degrees[Math.min(n, degrees.length - 1)];
-        render(data, sr, note.onset * beat, degreeHz(degree), note.dur * beat);
-      });
-    });
-
-  const DEGREES = SCALE.length; // 7
-
-  // Single notes — a "1000" figure: (kind, renderer, octaves, peak)
-  const voices = [
-    ["pluck", pluck, [0, 1, 2, 3], 0.9],
-    ["muted", mutedPluck, [1, 2], 0.7],
-    ["bell", bell, [2, 3], 0.75],
-    ["pad", pad, [0, 1], 0.6],
-    ["chip", chip, [1, 2], 0.55],
-  ];
-  for (const [kind, render, octaves, peak] of voices) {
-    for (const octave of octaves) {
-      for (let degree = 0; degree < DEGREES; degree++) {
-        figure(kind, peak, render, [octave * DEGREES + degree], "1000");
-      }
-    }
-  }
-
-  // Two-note figures: rising/falling by 1-3 scale steps across the rhythms.
-  const DUET_PATTERNS = [
-    [1, "1010"], [2, "1100"], [3, "1001"],
-    [-1, "0110"], [-2, "1001"], [-3, "1010"],
-  ];
-  for (const octave of [1, 2]) {
-    for (let degree = 0; degree < DEGREES; degree++) {
-      const base = octave * DEGREES + degree;
-      for (const [steps, rhythm] of DUET_PATTERNS) {
-        figure("duet", 0.9, pluck, [base, base + steps], rhythm);
-      }
-    }
-  }
-  for (let degree = 0; degree < DEGREES; degree++) {
-    const base = 2 * DEGREES + degree;
-    figure("bellduet", 0.75, bell, [base, base + 2], "1100");
-    figure("bellduet", 0.75, bell, [base, base - 2], "0110");
-  }
-
-  // Percussion: the renderers ignore pitch and duration, so a rhythm's
-  // onsets are simply hit placements within the beat.
-  const PERC_PATTERNS = [
-    [kick, 1.0, "1000"],
-    [kick, 1.0, "1010"],
-    [kick, 1.0, "1100"],
-    [snare, 0.8, "1000"],
-    [snare, 0.8, "0010"],
-    [hat, 0.45, "1000"],
-    [hat, 0.45, "1010"],
-    [hat, 0.45, "1001"],
-    [hat, 0.45, "0110"],
-    [shaker, 0.35, "1111"],
-    [block, 0.6, "1000"],
-    [block, 0.6, "0010"],
-    [tom, 0.85, "1000"],
-    [tomHigh, 0.8, "1001"],
-  ];
-  for (const [render, peak, rhythm] of PERC_PATTERNS) {
-    add("perc", peak, (data, sr) => {
-      for (const note of parseRhythm(rhythm)) render(data, sr, note.onset * beat, 0, beat * 0.5);
-    });
-  }
-
-  // Composed sequences (config.sequences): multi-beat melodic phrases in
-  // the pitch notation parsed by parseSequence, rendered with a named voice.
-  const SEQUENCE_VOICES = {
-    pluck: [pluck, 0.9],
-    muted: [mutedPluck, 0.7],
-    bell: [bell, 0.75],
-    pad: [pad, 0.6],
-    chip: [chip, 0.55],
-  };
-  for (const entry of sequences) {
-    const [render, peak] = SEQUENCE_VOICES[entry.voice] || SEQUENCE_VOICES.pluck;
-    const { notes, beats } = parseSequence(entry.seq);
-    if (notes.length === 0) continue;
-    add("seq", peak, (data, sr) => {
-      for (const note of notes) {
-        render(data, sr, note.onset * beat, degreeHz(note.degree), note.dur * beat);
-      }
-    }, beats);
-  }
-
-  return { buffers, kinds };
-}
-
 // ---- melodic voices -------------------------------------------------------
 // Each renderer mixes a note into `data` starting at `startSeconds`.
 
-function pluck(data, sr, startSeconds, freq, dur) {
-  karplusStrong(data, sr, startSeconds, freq, dur, 0.996, 1);
-}
-
-function mutedPluck(data, sr, startSeconds, freq, dur) {
-  karplusStrong(data, sr, startSeconds, freq, dur, 0.99, 3);
-}
-
 /** Karplus–Strong: white noise through a decaying averaging delay line. */
-function karplusStrong(data, sr, startSeconds, freq, dur, damping, smooth) {
+function pluck(data, sr, startSeconds, freq, dur, timbre, rng) {
+  const damping = timbre.damping ?? 0.996;
+  const smooth = timbre.smooth ?? 1;
   const start = Math.floor(startSeconds * sr);
   const length = Math.min(Math.floor(dur * sr), data.length - start);
   const period = Math.max(2, Math.round(sr / freq));
   const delay = new Float32Array(period);
-  for (let i = 0; i < period; i++) delay[i] = Math.random() * 2 - 1;
-  // Pre-smoothing dulls the attack for the muted variant.
+  for (let i = 0; i < period; i++) delay[i] = rng() * 2 - 1;
+  // Pre-smoothing dulls the attack for muted variants.
   for (let s = 0; s < smooth - 1; s++) {
     for (let i = 0; i < period; i++) {
       delay[i] = 0.5 * (delay[i] + delay[(i + 1) % period]);
@@ -423,134 +519,131 @@ function karplusStrong(data, sr, startSeconds, freq, dur, damping, smooth) {
   for (let i = 0; i < length; i++) {
     const current = delay[idx];
     delay[idx] = damping * 0.5 * (current + delay[(idx + 1) % period]);
-    data[start + i] += current * envelope(i / sr, length / sr);
+    data[start + i] += current * boundaryCut(i / sr, length / sr);
     idx = (idx + 1) % period;
   }
 }
 
-/** Simple two-operator FM bell: modulator at ~3x the carrier, decaying index. */
-function bell(data, sr, startSeconds, freq, dur) {
+/** Two-operator FM bell with a decaying modulation index. */
+function bell(data, sr, startSeconds, freq, dur, timbre) {
+  const ratio = timbre.ratio ?? 3.01;
+  const index0 = timbre.index ?? 3.5;
+  const tau = dur * (timbre.decayFrac ?? 0.33);
   const start = Math.floor(startSeconds * sr);
   const length = Math.min(Math.floor(dur * sr), data.length - start);
-  const tau = dur / 3;
   for (let i = 0; i < length; i++) {
     const t = i / sr;
-    const index = 3.5 * Math.exp(-t / (dur / 5));
-    const mod = index * Math.sin(2 * Math.PI * freq * 3.01 * t);
+    const index = index0 * Math.exp(-t / (dur / 5));
+    const mod = index * Math.sin(2 * Math.PI * freq * ratio * t);
     data[start + i] += Math.sin(2 * Math.PI * freq * t + mod) * Math.exp(-t / tau);
   }
 }
 
 /** Soft additive pad: a few harmonics under a slow attack/release envelope. */
-function pad(data, sr, startSeconds, freq, dur) {
+function pad(data, sr, startSeconds, freq, dur, timbre) {
+  const harmonics = timbre.harmonics ?? [1, 0.4, 0.2, 0.1];
+  const attack = dur * (timbre.attackFrac ?? 0.2);
+  const release = dur * (timbre.releaseFrac ?? 0.25);
   const start = Math.floor(startSeconds * sr);
   const length = Math.min(Math.floor(dur * sr), data.length - start);
-  const attack = dur * 0.2;
-  const release = dur * 0.25;
   for (let i = 0; i < length; i++) {
     const t = i / sr;
     let env = 1;
     if (t < attack) env = t / attack;
     else if (t > dur - release) env = (dur - t) / release;
     const w = 2 * Math.PI * freq * t;
-    data[start + i] +=
-      (Math.sin(w) + 0.4 * Math.sin(2 * w) + 0.2 * Math.sin(3 * w) + 0.1 * Math.sin(4 * w)) * env;
+    let sample = 0;
+    for (let h = 0; h < harmonics.length; h++) sample += harmonics[h] * Math.sin((h + 1) * w);
+    data[start + i] += sample * env;
   }
 }
 
-/** Chiptune square with a fast decay. */
-function chip(data, sr, startSeconds, freq, dur) {
+/** Chiptune pulse wave with a fast decay. */
+function chip(data, sr, startSeconds, freq, dur, timbre) {
+  const width = timbre.width ?? 0.25;
+  const tau = dur * (timbre.decayFrac ?? 0.4);
   const start = Math.floor(startSeconds * sr);
   const length = Math.min(Math.floor(dur * sr), data.length - start);
   for (let i = 0; i < length; i++) {
     const t = i / sr;
     const phase = (freq * t) % 1;
-    data[start + i] += (phase < 0.25 ? 1 : -1) * Math.exp(-t / (dur / 2.5));
+    data[start + i] += (phase < width ? 1 : -1) * Math.exp(-t / tau);
   }
 }
 
-/** Shared exponential-ish decay with a hard stop at the note boundary. */
-function envelope(t, dur) {
-  const tail = Math.min(1, (dur - t) / 0.02); // 20ms cut at the note boundary
-  return Math.max(0, tail);
+/** Hard cut at the note boundary so overlapping renders don't smear. */
+function boundaryCut(t, dur) {
+  return Math.max(0, Math.min(1, (dur - t) / 0.02));
 }
 
 // ---- percussion -----------------------------------------------------------
-// Renderers share the melodic signature (freq unused) so patterns can place
-// hits anywhere in the beat.
+// Renderers share a signature: (data, sr, startSeconds, recipe, rng); the
+// recipe's pitch/decay scale each instrument's character per cell.
 
-function kick(data, sr, startSeconds) {
+function kick(data, sr, startSeconds, p) {
   const start = Math.floor(startSeconds * sr);
-  const length = Math.min(Math.floor(0.15 * sr), data.length - start);
+  const length = Math.min(Math.floor(0.15 * p.decay * sr), data.length - start);
   let phase = 0;
   for (let i = 0; i < length; i++) {
     const t = i / sr;
-    phase += (2 * Math.PI * (45 + 110 * Math.exp(-t / 0.03))) / sr;
-    data[start + i] += Math.sin(phase) * Math.exp(-t / 0.09);
+    phase += (2 * Math.PI * (45 + 110 * Math.exp(-t / 0.03)) * p.pitch) / sr;
+    data[start + i] += Math.sin(phase) * Math.exp(-t / (0.09 * p.decay));
   }
 }
 
-function snare(data, sr, startSeconds) {
+function snare(data, sr, startSeconds, p, rng) {
   const start = Math.floor(startSeconds * sr);
-  const length = Math.min(Math.floor(0.18 * sr), data.length - start);
+  const length = Math.min(Math.floor(0.18 * p.decay * sr), data.length - start);
   for (let i = 0; i < length; i++) {
     const t = i / sr;
-    const noise = (Math.random() * 2 - 1) * Math.exp(-t / 0.05) * 0.8;
-    const body = Math.sin(2 * Math.PI * 185 * t) * Math.exp(-t / 0.06) * 0.5;
+    const noise = (rng() * 2 - 1) * Math.exp(-t / (0.05 * p.decay)) * 0.8;
+    const body = Math.sin(2 * Math.PI * 185 * p.pitch * t) * Math.exp(-t / 0.06) * 0.5;
     data[start + i] += noise + body;
   }
 }
 
-function hat(data, sr, startSeconds) {
+function hat(data, sr, startSeconds, p, rng) {
   const start = Math.floor(startSeconds * sr);
-  const length = Math.min(Math.floor(0.06 * sr), data.length - start);
+  const length = Math.min(Math.floor(0.06 * p.decay * sr), data.length - start);
   let prev = 0;
   for (let i = 0; i < length; i++) {
     const t = i / sr;
-    const noise = Math.random() * 2 - 1;
-    data[start + i] += (noise - prev) * Math.exp(-t / 0.02); // crude highpass
+    const noise = rng() * 2 - 1;
+    data[start + i] += (noise - prev) * Math.exp(-t / (0.02 * p.decay)); // crude highpass
     prev = noise;
   }
 }
 
-function shaker(data, sr, startSeconds) {
+function shaker(data, sr, startSeconds, p, rng) {
   const start = Math.floor(startSeconds * sr);
-  const length = Math.min(Math.floor(0.05 * sr), data.length - start);
+  const length = Math.min(Math.floor(0.05 * p.decay * sr), data.length - start);
   let filtered = 0;
   for (let i = 0; i < length; i++) {
     const t = i / sr;
-    filtered = 0.6 * filtered + 0.4 * (Math.random() * 2 - 1);
-    data[start + i] += filtered * Math.exp(-t / 0.025);
+    filtered = 0.6 * filtered + 0.4 * (rng() * 2 - 1);
+    data[start + i] += filtered * Math.exp(-t / (0.025 * p.decay));
   }
 }
 
-function block(data, sr, startSeconds) {
+function block(data, sr, startSeconds, p) {
   const start = Math.floor(startSeconds * sr);
   const length = Math.min(Math.floor(0.07 * sr), data.length - start);
   for (let i = 0; i < length; i++) {
     const t = i / sr;
     data[start + i] +=
-      (Math.sin(2 * Math.PI * 950 * t) + 0.5 * Math.sin(2 * Math.PI * 1450 * t)) *
-      Math.exp(-t / 0.02);
+      (Math.sin(2 * Math.PI * 950 * p.pitch * t) + 0.5 * Math.sin(2 * Math.PI * 1450 * p.pitch * t)) *
+      Math.exp(-t / (0.02 * p.decay));
   }
 }
 
-function tom(data, sr, startSeconds) {
-  tomAt(data, sr, startSeconds, 100);
-}
-
-function tomHigh(data, sr, startSeconds) {
-  tomAt(data, sr, startSeconds, 170);
-}
-
-function tomAt(data, sr, startSeconds, baseHz) {
+function tom(data, sr, startSeconds, p) {
   const start = Math.floor(startSeconds * sr);
-  const length = Math.min(Math.floor(0.2 * sr), data.length - start);
+  const length = Math.min(Math.floor(0.2 * p.decay * sr), data.length - start);
   let phase = 0;
   for (let i = 0; i < length; i++) {
     const t = i / sr;
-    phase += (2 * Math.PI * (baseHz + 60 * Math.exp(-t / 0.04))) / sr;
-    data[start + i] += Math.sin(phase) * Math.exp(-t / 0.11);
+    phase += (2 * Math.PI * (100 + 60 * Math.exp(-t / 0.04)) * p.pitch) / sr;
+    data[start + i] += Math.sin(phase) * Math.exp(-t / (0.11 * p.decay));
   }
 }
 

@@ -40,6 +40,14 @@ window.CONWAY_MUSIC_CONFIG = {
   // quietest casualties of a very crowded board).
   maxVoices: 64,
 
+  // Geographic mode: when true, a cell's position shapes its sound — rows
+  // pick the register and voice family (sustained pads low, bright bells
+  // and chips high), percussion gathers in the bottom two rows, and the
+  // scale degree follows the column so horizontal motion reads as melodic
+  // motion. When false, sounds are scattered at random (still unique per
+  // cell in parametric synth mode).
+  geographic: false,
+
   // Composed sequences added to the built-in synth bank, written in a
   // compact notation, one character per sixteenth note:
   //   1-7  note onset on that scale degree (in A minor: 1=A 2=B 3=C 4=D

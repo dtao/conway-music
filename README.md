@@ -78,14 +78,28 @@ Sound sources are tried in order:
 1. `audio.files` — an explicit array of audio URLs.
 2. `audio.manifestUrl` — a JSON file listing audio URLs (see
    `sounds/README.md` for the format).
-3. **Fallback**: a built-in bank of 196 synthesized sounds, so the app is
-   playable with zero setup. Five melodic voices (Karplus–Strong plucks,
-   muted plucks, FM bells, soft pads, chip squares) on the A natural minor
-   scale; 98 two-note figures rising or falling by 1–3 scale steps; and 14
-   percussion patterns (kick, snare, hats, shaker, woodblock, toms). Every
-   clip is rendered to last exactly one beat, and the bank retunes itself
-   when you change the BPM. Percussion cells render desaturated (silver)
-   so drums are recognizable on the board.
+3. **Fallback — parametric synth**: every cell gets its own synthesis
+   recipe, deterministically derived from `assignmentSeed`, so all 792
+   cells are unique. A recipe picks a category (melodic figure, composed
+   sequence, or percussion — roughly 75/15/10), a voice (Karplus–Strong
+   pluck, muted pluck, FM bell, soft pad, or chip pulse), pitch material
+   on the A natural minor scale, a rhythm, and continuous timbre
+   parameters: string damping, FM ratio and index, pulse width, envelope
+   speeds, a few cents of detune, and a unique noise seed (so no two
+   plucks are ever literally identical). Buffers render lazily on a
+   cell's first birth into a capped cache, and a BPM change re-renders
+   everything to fit the new beat while cells keep their sound identity.
+   Percussion cells render desaturated (silver) so drums are
+   recognizable on the board.
+
+### Geographic mode
+
+Set `geographic: true` in `config.js` to make the board play like an
+instrument: rows pick the register and voice family (sustained pads at
+the bottom rising to bright bells and chips at the top), percussion
+gathers in the bottom two rows, and the scale degree follows the column
+so horizontal motion reads as melodic motion — a glider actually goes
+somewhere. Off by default; every cell remains unique either way.
 
    Rhythms are written in a sixteenth-grid notation, four characters per
    beat: each `1` starts a note that sustains until the next `1` (or the

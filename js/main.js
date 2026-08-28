@@ -10,6 +10,7 @@ const DEFAULTS = {
   assignmentSeed: 42,
   maxVoices: 64,
   sequences: [],
+  geographic: false,
 };
 
 const userConfig = window.CONWAY_MUSIC_CONFIG || {};
@@ -24,21 +25,18 @@ const config = {
 // State
 
 const grid = new LifeGrid(config.grid.cols, config.grid.rows);
-const audio = new AudioEngine(config);
 
-// Each cell gets a stable value in [0, 1) from a seeded PRNG. The same value
-// picks both the cell's sound (scaled to the bank size once loaded) and its
-// hue, so color always corresponds to sound.
+// Each cell gets a stable value in [0, 1) from a seeded PRNG, used for its
+// hue and (in file mode) its mapping onto the loaded audio files. In
+// parametric synth mode each cell derives its own full synthesis recipe
+// inside the audio engine.
 const soundValues = new Float32Array(grid.cells.length);
 {
   const rng = mulberry32(config.assignmentSeed);
   for (let i = 0; i < soundValues.length; i++) soundValues[i] = rng();
 }
 
-function soundIndexOf(cellIndex) {
-  const bankSize = audio.buffers.length || 1;
-  return Math.floor(soundValues[cellIndex] * bankSize) % bankSize;
-}
+const audio = new AudioEngine(config, soundValues);
 
 let bpm = config.bpm;
 let playing = false;
@@ -160,7 +158,7 @@ function scheduleBeat(time) {
   }
 
   for (const i of deaths) audio.stopVoice(i, time);
-  for (const i of births) audio.startVoice(i, soundIndexOf(i), time);
+  for (const i of births) audio.startVoice(i, time);
 
   beatQueue.push({
     time,
@@ -185,14 +183,14 @@ function toggleCell(col, row, forceAlive = null) {
 
   if (playing && audio.ctx) {
     // Live editing: the cell joins or leaves the music immediately.
-    if (alive) audio.startVoice(i, soundIndexOf(i), audio.now);
+    if (alive) audio.startVoice(i, audio.now);
     else audio.stopVoice(i, audio.now);
     if (viewCells !== grid.cells) viewCells[i] = alive ? 1 : 0;
     // Snapshots already queued for upcoming beats predate this edit.
     for (const frame of beatQueue) frame.cells[i] = alive ? 1 : 0;
   } else {
     // While paused, preview the cell's sound as it is painted on.
-    if (alive) ensureAudio().then(() => audio.preview(soundIndexOf(i)));
+    if (alive) ensureAudio().then(() => audio.preview(i));
     syncHash();
   }
   if (alive) bornAt[i] = audio.ctx ? audio.now : performance.now() / 1000;
@@ -350,7 +348,7 @@ function render() {
       const alive = viewCells[i] === 1;
       const hue = hueOf(i);
       // Percussion cells render desaturated (silver) so drums read at a glance.
-      const perc = audio.kinds.length > 0 && audio.kinds[soundIndexOf(i)] === "perc";
+      const perc = audio.kindForCell(i) === "perc";
       const sat = perc ? 10 : 85;
 
       if (alive) {
