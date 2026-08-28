@@ -63,13 +63,12 @@ window.CONWAY_MUSIC_CONFIG = {
   // top panel (or L / shift+L). Off by default.
   leads: [false, false],
 
-  // Master effects, toggled live from the FX panel on the right. All run
-  // at the bus level (constant cost regardless of voice count): reverb is
-  // convolution over a generated impulse response with per-kind sends
-  // (drums dry, pads wet), delay is tempo-synced to a dotted eighth,
-  // chorus colors only the pad/lead bus, and saturation is a waveshaper
-  // on the master (crunchier when the 8-bit family is active).
-  effects: { reverb: false, delay: false, chorus: false, saturation: false },
+  // Master effects, toggled live from the FX panel on the right (collapsed
+  // by default). All run at the bus level (constant cost regardless of
+  // voice count): reverb is convolution over a generated impulse response
+  // with per-kind sends (drums dry, pads wet), delay is tempo-synced to a
+  // dotted eighth, and chorus colors only the pad/lead bus.
+  effects: { reverb: true, delay: true, chorus: true },
 
   // Voice family: the instrument palette cells draw from. "classic" is
   // the original bank (plucks, FM bells, pads, chips); "orchestral" trades

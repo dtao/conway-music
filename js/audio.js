@@ -41,12 +41,11 @@ export class AudioEngine {
     this.maxVoices = this.autoVoices ? 48 : config.maxVoices;
     this._pressure = 0; // times the cap silenced or stole a voice
     // Master effects, all bus-level so cost is constant per effect no
-    // matter how many voices play. Off by default; toggled live.
+    // matter how many voices play. On by default; toggled live.
     this.fxEnabled = {
-      reverb: false,
-      delay: false,
-      chorus: false,
-      saturation: false,
+      reverb: true,
+      delay: true,
+      chorus: true,
       ...(config.effects || {}),
     };
     this.fileBuffers = null; // non-null => file mode
@@ -86,17 +85,12 @@ export class AudioEngine {
    * Effects graph. Voices route into one of three kind buses (percussion /
    * melodic / pad+leads), each with its own dry path into the master plus
    * reverb and delay send levels — drums stay tight while pads swim. The
-   * pad bus carries a chorus insert; the master runs through a waveshaper
-   * (saturation) into the compressor. Reverb and delay sends are physically
+   * pad bus carries a chorus insert. Reverb and delay sends are physically
    * disconnected while off, so a disabled effect costs nothing.
    */
   _buildFx(compressor) {
     const ctx = this.ctx;
-
-    // master -> saturation -> compressor (null curve = clean passthrough)
-    this.shaper = ctx.createWaveShaper();
-    this.master.connect(this.shaper);
-    this.shaper.connect(compressor);
+    this.master.connect(compressor);
 
     // Reverb: convolution over a procedurally generated impulse response.
     this.convolver = ctx.createConvolver();
@@ -206,25 +200,6 @@ export class AudioEngine {
       case "chorus":
         this.chorusWet.gain.setTargetAtTime(on ? 0.55 : 0, this.now, 0.05);
         break;
-      case "saturation": {
-        if (!on) {
-          this.shaper.curve = null;
-          this.shaper.oversample = "none";
-          break;
-        }
-        // Crunchier curve when the 8-bit family is active.
-        const amount = this.config.voiceFamily === "eightbit" ? 3 : 1.3;
-        const n = 1024;
-        const curve = new Float32Array(n);
-        const norm = Math.tanh(1 + amount);
-        for (let i = 0; i < n; i++) {
-          const x = (i / (n - 1)) * 2 - 1;
-          curve[i] = Math.tanh(x * (1 + amount)) / norm;
-        }
-        this.shaper.curve = curve;
-        this.shaper.oversample = "2x";
-        break;
-      }
     }
   }
 
@@ -324,8 +299,6 @@ export class AudioEngine {
   resetRecipes() {
     this.recipes.clear();
     this.bufferCache.clear();
-    // The saturation curve is family-aware; refresh it on family changes.
-    if (this.ctx && this.fxEnabled.saturation) this._applyFx("saturation");
   }
 
   setLeadEnabled(index, on) {

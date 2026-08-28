@@ -138,8 +138,9 @@ roles onto the synthesis primitives with per-cell timbre distributions
 
 ### Effects
 
-The collapsible **FX panel** on the right toggles four master effects,
-all bus-level so their cost is constant no matter how many voices play:
+The collapsible **FX panel** on the right (collapsed by default)
+toggles three master effects, all bus-level so their cost is constant
+no matter how many voices play:
 
 - **Reverb** — convolution over a procedurally generated impulse
   response, fed by per-kind sends: percussion stays tight, melodic
@@ -148,12 +149,10 @@ all bus-level so their cost is constant no matter how many voices play:
   loop, on the same per-kind sends.
 - **Chorus** — an LFO-modulated short delay coloring only the pad/lead
   bus.
-- **Saturation** — a waveshaper on the master for analog-style glue,
-  switching to a crunchier curve while the 8-bit family is active.
 
-Reverb and delay sends are physically disconnected while off, so a
-disabled effect costs nothing. Defaults come from `effects` in
-`config.js`.
+All three are on by default (`effects` in `config.js`); reverb and
+delay sends are physically disconnected while off, so a disabled
+effect costs nothing.
 
 ### Lead overlays
 

@@ -16,7 +16,7 @@ const DEFAULTS = {
   gridCount: 1,
   gridRhythms: [1, 1.5, 0.75],
   voiceFamily: "classic",
-  effects: { reverb: false, delay: false, chorus: false, saturation: false },
+  effects: { reverb: true, delay: true, chorus: true },
 };
 
 const userConfig = window.CONWAY_MUSIC_CONFIG || {};
@@ -102,10 +102,7 @@ const controlsBar = document.getElementById("controls");
 const fxPanel = document.getElementById("fxpanel");
 const fxCollapse = document.getElementById("fx-collapse");
 const fxBoxes = Object.fromEntries(
-  ["reverb", "delay", "chorus", "saturation"].map((name) => [
-    name,
-    document.getElementById(`fx-${name}`),
-  ])
+  ["reverb", "delay", "chorus"].map((name) => [name, document.getElementById(`fx-${name}`)])
 );
 const bpmSlider = document.getElementById("bpm");
 const bpmValue = document.getElementById("bpm-value");
