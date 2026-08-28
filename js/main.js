@@ -220,7 +220,10 @@ function clearBoard() {
 
 function randomizeBoard() {
   if (playing) pause();
-  grid.randomize(0.22);
+  // Draw the density fresh each click, biased toward the sparse end, so
+  // Random ranges from a handful of seeds to a crowded board.
+  const density = 0.03 + 0.3 * Math.pow(Math.random(), 1.6);
+  grid.randomize(density);
   viewCells = grid.cells;
   viewGeneration = 0;
   updateGenerationLabel();
