@@ -190,6 +190,7 @@ function pause() {
 /** Schedule master beats and every visible grid's steps, in time order. */
 function scheduleAhead() {
   const horizon = audio.now + SCHEDULE_AHEAD;
+  let sawLate = false;
   while (playing) {
     // Earliest pending event wins; master beats break ties so the chord
     // and overlay state are current before any step at the same instant.
@@ -201,8 +202,8 @@ function scheduleAhead() {
         which = g;
       }
     }
-    if (best >= horizon) return;
-    if (best < audio.now - 0.03) governor.lateEvents++; // missed a deadline
+    if (best >= horizon) break;
+    if (best < audio.now - 0.03) sawLate = true; // missed a deadline
     if (which === -1) {
       masterTick(nextMasterTime);
       nextMasterTime += beatDuration();
@@ -212,44 +213,44 @@ function scheduleAhead() {
       nextStepTime[which] += STEP_BEATS[which] * beatDuration();
     }
   }
+  if (sawLate) governor.lateBatches++;
 }
 
 function masterTick(time) {
   if (pendingSwaps) applyPendingSwaps(time);
   audio.overlayBeat(time, bpm, totalPopulation(), masterBeat);
   masterBeat++;
+  if (masterBeat % GOVERNOR_BEATS === 0) governorCheck();
   if (totalPopulation() === 0 && !pendingSwaps) pause();
 }
 
 // ---------------------------------------------------------------------------
 // Voice governor: with maxVoices "auto", the polyphony cap follows measured
 // performance. A render benchmark at init sets the starting point; from
-// there, scheduler lateness or long frames pull the cap down, and sustained
-// clean running while the cap is under pressure pushes it back up.
+// there the cap is reviewed every eight master beats — musical time, not a
+// wall-clock poll. A scheduler pass that dispatched anything late counts as
+// ONE late batch (hiccups make whole queues late at once, and counting each
+// event punished a single stumble many times over); cutting requires
+// repeated evidence within the window, and recovery needs only one clean,
+// pressured window.
 
-const governor = { lateEvents: 0, longFrames: 0, cleanStreak: 0, lastFrameTs: 0 };
+const GOVERNOR_BEATS = 8;
+const governor = { lateBatches: 0, longFrames: 0, lastFrameTs: 0 };
 
-setInterval(() => {
-  if (!audio.autoVoices || !audio.ctx) return;
+function governorCheck() {
+  if (!audio.autoVoices) return;
   const pressure = audio.takeCapPressure();
-  if (!playing) {
-    governor.lateEvents = 0;
-    governor.longFrames = 0;
-    return;
-  }
-  const stressed = governor.lateEvents > 0 || governor.longFrames > 2;
+  const stressed = governor.lateBatches >= 2 || governor.longFrames >= 4;
   if (stressed) {
-    audio.setVoiceCap(audio.maxVoices * 0.85);
-    governor.cleanStreak = 0;
+    audio.setVoiceCap(audio.maxVoices * 0.9);
     updateBankLabel();
-  } else if (pressure > 0 && ++governor.cleanStreak >= 2) {
+  } else if (pressure > 0) {
     audio.setVoiceCap(audio.maxVoices + 8);
-    governor.cleanStreak = 0;
     updateBankLabel();
   }
-  governor.lateEvents = 0;
+  governor.lateBatches = 0;
   governor.longFrames = 0;
-}, 2000);
+}
 
 function updateBankLabel() {
   soundbankLabel.textContent = `${audio.bankLabel} · ${audio.maxVoices} voices`;
