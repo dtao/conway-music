@@ -6,13 +6,13 @@ import { PRESETS, stampPreset } from "./patterns.js";
 const DEFAULTS = {
   audio: { files: null, baseUrl: "", manifestUrl: "sounds/manifest.json" },
   grid: { cols: 36, rows: 22 },
-  bpm: 120,
+  bpm: 96,
   assignmentSeed: 42,
   maxVoices: 64,
   sequences: [],
   geographic: false,
   soundMode: "famcg",
-  leads: [true, false],
+  leads: [false, false],
 };
 
 const userConfig = window.CONWAY_MUSIC_CONFIG || {};

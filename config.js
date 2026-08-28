@@ -30,7 +30,7 @@ window.CONWAY_MUSIC_CONFIG = {
   },
 
   // One Game of Life generation elapses per beat.
-  bpm: 120,
+  bpm: 96,
 
   // Sounds are scattered across the grid with a seeded shuffle so the
   // layout is stable across reloads. Change the seed for a new layout.
@@ -49,8 +49,8 @@ window.CONWAY_MUSIC_CONFIG = {
   // shrinking = the sixth), and when both voices sing, lead 2 always
   // takes the next interval in that cycle so the pair harmonizes. Volume
   // and brightness swell smoothly with board activity. Toggle live in the
-  // top panel (or L / shift+L).
-  leads: [true, false],
+  // top panel (or L / shift+L). Off by default.
+  leads: [false, false],
 
   // Sound mode: which note pool melodic cells draw from. The dropdown
   // currently offers three chord progressions — "famcg" (F–Am–C–G),

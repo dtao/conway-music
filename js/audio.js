@@ -37,7 +37,7 @@ export class AudioEngine {
     this.recipes = new Map(); // cell index -> recipe (synth mode)
     this.bufferCache = new Map(); // cell index -> rendered AudioBuffer
     this._synthBpm = null; // non-null => parametric synth mode
-    const leads = Array.isArray(config.leads) ? config.leads : [true, false];
+    const leads = Array.isArray(config.leads) ? config.leads : [false, false];
     this.leadsEnabled = [!!leads[0], !!leads[1]];
     this._leads = [null, null];
     this._leadState = { notes: [], pops: [] };
