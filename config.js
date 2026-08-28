@@ -40,6 +40,14 @@ window.CONWAY_MUSIC_CONFIG = {
   // quietest casualties of a very crowded board).
   maxVoices: 64,
 
+  // Lead overlay: a monophonic sustained solo voice (clarinet-ish, with
+  // vibrato) floating above the grid. Each beat it takes a rolling
+  // recency-weighted average of the notes the board is playing, snaps it
+  // to the current mode's note pool in a soloist's register, and glides
+  // there; its volume and brightness swell and fade smoothly with board
+  // activity. Toggle live with the Lead button (or the L key).
+  leadOverlay: true,
+
   // Sound mode: which note pool melodic cells draw from. "minor" is the
   // full A natural minor field; "cmajor" favors C/E/G triads with sparse
   // D and A, B only in high registers, and its own triadic sequences.

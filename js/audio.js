@@ -37,6 +37,8 @@ export class AudioEngine {
     this.recipes = new Map(); // cell index -> recipe (synth mode)
     this.bufferCache = new Map(); // cell index -> rendered AudioBuffer
     this._synthBpm = null; // non-null => parametric synth mode
+    this.leadEnabled = config.leadOverlay !== false;
+    this._lead = null;
   }
 
   /** Must be called from a user gesture (browsers gate audio on one). */
@@ -87,6 +89,37 @@ export class AudioEngine {
   resetRecipes() {
     this.recipes.clear();
     this.bufferCache.clear();
+  }
+
+  setLeadEnabled(on) {
+    this.leadEnabled = on;
+    if (!on) this._killLead();
+  }
+
+  _killLead() {
+    if (!this._lead) return;
+    this._lead.stop(this.now);
+    this._lead = null;
+  }
+
+  /**
+   * Per-beat hook for the lead overlay: feed it the semitones the board is
+   * currently sounding. Synth mode only (file buffers carry no pitch data).
+   */
+  overlayBeat(time, bpm) {
+    if (!this.ctx || !this.usesSynthBank) return;
+    if (!this.leadEnabled) {
+      this._killLead();
+      return;
+    }
+    if (!this._lead) this._lead = new LeadOverlay(this.ctx, this.master);
+    const semitones = [];
+    for (const cellIndex of this.voices.keys()) {
+      const recipe = this.recipeFor(cellIndex);
+      for (const s of recipeSemitones(recipe)) semitones.push(s);
+    }
+    const mode = SOUND_MODES[this.config.soundMode] || SOUND_MODES.minor;
+    this._lead.update(time, semitones, bpm, mode);
   }
 
   async _loadBank(bpm) {
@@ -253,6 +286,7 @@ export class AudioEngine {
   stopAllVoices(when = this.now) {
     for (const voice of this.voices.values()) this._fadeOut(voice, when);
     this.voices.clear();
+    this._killLead();
   }
 
   _fadeOut(voice, when) {
@@ -288,6 +322,146 @@ export class AudioEngine {
     source.start();
     source.onended = cleanup;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Lead overlay: a monophonic sustained voice above the grid. Each beat it
+// samples the notes the board is currently playing, keeps a rolling
+// recency-weighted average, folds that average into a soloist's register,
+// snaps it to the current mode's note pool, and glides there. Its volume
+// (and its brightness — the filter opens as it gets louder) tracks board
+// activity through slow ramps, so it swells and fades like a bowed or blown
+// instrument rather than switching on and off.
+
+const LEAD_LEVEL = 0.22;
+const LEAD_WINDOW_BEATS = 8; // rolling window the average listens to
+const LEAD_TAU_BEATS = 3; // recency half-life-ish decay inside the window
+const LEAD_REGISTER = [24, 45]; // semitones above the root: ~A4 to ~E6
+
+class LeadOverlay {
+  constructor(ctx, master) {
+    this.ctx = ctx;
+    this.history = [];
+    this.freq = null;
+
+    // Clarinet-ish tone: odd harmonics only.
+    const harmonics = [0, 1, 0, 0.4, 0, 0.25, 0, 0.12, 0, 0.06];
+    const real = new Float32Array(harmonics.length);
+    const imag = new Float32Array(harmonics);
+    this.osc = ctx.createOscillator();
+    this.osc.setPeriodicWave(ctx.createPeriodicWave(real, imag));
+    this.osc.frequency.value = 440;
+
+    this.filter = ctx.createBiquadFilter();
+    this.filter.type = "lowpass";
+    this.filter.frequency.value = 700;
+    this.filter.Q.value = 1.1;
+
+    this.gain = ctx.createGain();
+    this.gain.gain.value = 0;
+
+    // Gentle vibrato on the oscillator's detune (in cents).
+    this.vibrato = ctx.createOscillator();
+    this.vibrato.frequency.value = 5.3;
+    this.vibratoGain = ctx.createGain();
+    this.vibratoGain.gain.value = 8;
+    this.vibrato.connect(this.vibratoGain);
+    this.vibratoGain.connect(this.osc.detune);
+
+    this.osc.connect(this.filter);
+    this.filter.connect(this.gain);
+    this.gain.connect(master);
+    this.osc.start();
+    this.vibrato.start();
+  }
+
+  /** Called once per beat with the semitones the board is sounding now. */
+  update(time, semitones, bpm, mode) {
+    const beat = 60 / bpm;
+    this.history.push({ time, semitones });
+    const cutoff = time - LEAD_WINDOW_BEATS * beat;
+    this.history = this.history.filter((h) => h.time > cutoff);
+
+    // Volume and brightness follow activity, on slow expressive ramps.
+    const activity = Math.min(1, semitones.length / 10);
+    this.gain.gain.setTargetAtTime(LEAD_LEVEL * Math.sqrt(activity), time, 0.7);
+    this.filter.frequency.setTargetAtTime(500 + 2800 * Math.sqrt(activity), time, 0.7);
+
+    // Recency-weighted rolling average of everything in the window.
+    const tau = LEAD_TAU_BEATS * beat;
+    let sum = 0;
+    let weight = 0;
+    for (const h of this.history) {
+      const w = Math.exp(-(time - h.time) / tau);
+      for (const s of h.semitones) {
+        sum += w * s;
+        weight += w;
+      }
+    }
+    if (weight === 0) return; // silent board: keep the last pitch, fade out
+
+    let average = sum / weight;
+    while (average < LEAD_REGISTER[0]) average += 12;
+    while (average > LEAD_REGISTER[1]) average -= 12;
+    const hz = ROOT_HZ * Math.pow(2, nearestModeSemitone(average, mode) / 12);
+
+    if (this.freq === null) {
+      this.osc.frequency.setValueAtTime(hz, time);
+      this.freq = hz;
+    } else if (Math.abs(hz - this.freq) > 0.5) {
+      // Portamento to the new note.
+      this.osc.frequency.cancelScheduledValues(time);
+      this.osc.frequency.setValueAtTime(this.freq, time);
+      this.osc.frequency.exponentialRampToValueAtTime(hz, time + Math.min(0.35, beat * 0.8));
+      this.freq = hz;
+    }
+  }
+
+  stop(when) {
+    this.gain.gain.cancelScheduledValues(when);
+    this.gain.gain.setTargetAtTime(0, when, 0.12);
+    this.osc.stop(when + 1);
+    this.vibrato.stop(when + 1);
+  }
+}
+
+/** Snap a raw semitone value to the nearest note the mode allows in the lead register. */
+function nearestModeSemitone(target, mode) {
+  let best = LEAD_REGISTER[0];
+  let bestDistance = Infinity;
+  for (let octave = 2; octave <= 3; octave++) {
+    for (const note of mode.notes) {
+      if (note.octaves && (octave < note.octaves[0] || octave > note.octaves[1])) continue;
+      const semi = octave * 12 + SCALE[note.degree];
+      const distance = Math.abs(semi - target);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = semi;
+      }
+    }
+  }
+  return best;
+}
+
+/** Absolute scale degree -> semitones above the root. */
+function semitoneOf(n) {
+  const octave = Math.floor(n / DEGREES);
+  const degree = ((n % DEGREES) + DEGREES) % DEGREES;
+  return octave * 12 + SCALE[degree];
+}
+
+/** The semitones a recipe sounds (memoized on the recipe; percussion: none). */
+function recipeSemitones(recipe) {
+  if (recipe._semitones) return recipe._semitones;
+  let semis = [];
+  if (recipe.type === "melodic") {
+    semis = recipe.degrees.map(semitoneOf);
+  } else if (recipe.type === "seq") {
+    semis = parseSequence(recipe.seq).notes.map((n) =>
+      semitoneOf(n.degree + recipe.octaveShift * DEGREES));
+  }
+  recipe._semitones = semis;
+  return semis;
 }
 
 // ---------------------------------------------------------------------------

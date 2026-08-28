@@ -130,6 +130,12 @@ select option {
   color: var(--text);
 }
 
+button.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(94, 234, 212, 0.12);
+}
+
 button.primary {
   color: #06281f;
   background: var(--accent);

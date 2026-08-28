@@ -94,6 +94,19 @@ Sound sources are tried in order:
    field by its column — travelers like gliders literally move through
    the mix — with a small per-cell gain trim for depth.
 
+### Lead overlay
+
+The **Lead** toggle (L) adds a monophonic solo voice that floats above
+the grid — a clarinet-ish sustained tone with vibrato. Each beat it takes
+a rolling, recency-weighted average of every note the board is currently
+sounding (an 8-beat window), folds that average into a soloist's
+register, snaps it to the current mode's note pool, and glides there
+with a short portamento. Its volume and brightness track board activity
+through slow ramps, so it swells as the colony blooms and fades as it
+dies back — the board is the orchestra, the overlay plays the melody the
+orchestra implies. On by default (`leadOverlay` in `config.js`);
+synth-mode only, since audio files carry no pitch information.
+
 ### Sound modes
 
 The **mode selector** in the control bar (or `soundMode` in `config.js`)
