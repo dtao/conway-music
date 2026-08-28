@@ -131,6 +131,9 @@ switches the note pool melodic cells draw from:
 - **E dorian drift** — dominated by E, G, and B, with F♯, C♯, and D
   appearing sparsely and only in the upper registers. F♯ and C♯ live
   outside A natural minor, so this mode carries its own scale.
+- **Whole-tone dream** — C, D, E, F♯, G♯, A♯, all equally weighted: the
+  whole-tone scale, where the leads' 3rd/6th harmonies snap to major
+  thirds and augmented fifths for a floating, Debussy-like haze.
 
 Modes are pure data (`SOUND_MODES` in `js/audio.js`): a weighted list of
 scale degrees with optional register restrictions, a sequence pool, and

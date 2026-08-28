@@ -619,6 +619,27 @@ export const SOUND_MODES = {
       { voice: "pad", seq: "5---7---'2------" },
     ],
   },
+  wholetone: {
+    label: "Whole-tone dream",
+    // Six whole steps up from C: C D E F# G# A#. The pipeline expects
+    // seven degrees, so degree 6 pads the octave (C again) and stays out
+    // of the note pool and the sequences.
+    scale: [3, 5, 7, 9, 11, 13, 15],
+    notes: [0, 1, 2, 3, 4, 5].map((degree) => ({ degree, weight: 1 })),
+    // Notation degrees: 1=C 2=D 3=E 4=F# 5=G# 6=A#.
+    sequences: [
+      { voice: "pluck", seq: "1-3-5---" }, // C E G# — augmented rise
+      { voice: "pluck", seq: "5-3-1---" },
+      { voice: "pluck", seq: "2-4-6---" }, // D F# A# — the other augmented triad
+      { voice: "pluck", seq: "6-4-2---" },
+      { voice: "pluck", seq: "123456--" }, // sixteenth run up the scale
+      { voice: "pluck", seq: "1-2-3-4-5-6-'1--" }, // full ascent over 4 beats
+      { voice: "muted", seq: "1--3--5-" },
+      { voice: "bell", seq: "'1-6----" }, // high C drifting to A#
+      { voice: "chip", seq: "1.3.5.3." },
+      { voice: "pad", seq: "1---3---5---6---" },
+    ],
+  },
 };
 
 /**
