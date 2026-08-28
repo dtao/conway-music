@@ -90,7 +90,9 @@ Sound sources are tried in order:
    cell's first birth into a capped cache, and a BPM change re-renders
    everything to fit the new beat while cells keep their sound identity.
    Percussion cells render desaturated (silver) so drums are
-   recognizable on the board.
+   recognizable on the board. Every voice is also placed in the stereo
+   field by its column — travelers like gliders literally move through
+   the mix — with a small per-cell gain trim for depth.
 
 ### Geographic mode
 

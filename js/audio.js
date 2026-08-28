@@ -179,6 +179,37 @@ export class AudioEngine {
     this.bufferCache.set(cellIndex, buffer);
   }
 
+  /**
+   * The cell's stereo position: its column, mapped across the field, so the
+   * sound sits where the cell sits and travelers move through the mix.
+   */
+  _panForCell(cellIndex) {
+    const cols = this.config.grid.cols;
+    if (cols < 2) return 0;
+    return ((cellIndex % cols) / (cols - 1) * 2 - 1) * 0.8;
+  }
+
+  _gainForCell(cellIndex) {
+    const trim = this.usesSynthBank ? this.recipeFor(cellIndex).gainTrim : 1;
+    return VOICE_GAIN * trim;
+  }
+
+  /** gain -> (panner) -> master; returns the node to feed and a cleanup. */
+  _buildVoiceChain(cellIndex, gain) {
+    if (typeof this.ctx.createStereoPanner !== "function") {
+      gain.connect(this.master);
+      return () => gain.disconnect();
+    }
+    const panner = this.ctx.createStereoPanner();
+    panner.pan.value = this._panForCell(cellIndex);
+    gain.connect(panner);
+    panner.connect(this.master);
+    return () => {
+      gain.disconnect();
+      panner.disconnect();
+    };
+  }
+
   /** Start a cell's looping voice at audio-clock time `when`. */
   startVoice(cellIndex, when) {
     if (this.voices.has(cellIndex)) return;
@@ -193,13 +224,13 @@ export class AudioEngine {
 
     const gain = this.ctx.createGain();
     gain.gain.setValueAtTime(0, when);
-    gain.gain.linearRampToValueAtTime(VOICE_GAIN, when + ATTACK);
+    gain.gain.linearRampToValueAtTime(this._gainForCell(cellIndex), when + ATTACK);
 
     source.connect(gain);
-    gain.connect(this.master);
+    const cleanup = this._buildVoiceChain(cellIndex, gain);
     source.start(when);
 
-    this.voices.set(cellIndex, { source, gain, startedAt: when });
+    this.voices.set(cellIndex, { source, gain, cleanup, startedAt: when });
   }
 
   /** Stop a cell's voice at audio-clock time `when` (short fade, no click). */
@@ -220,7 +251,7 @@ export class AudioEngine {
     voice.gain.gain.setValueAtTime(voice.gain.gain.value, t);
     voice.gain.gain.linearRampToValueAtTime(0, t + RELEASE);
     voice.source.stop(t + RELEASE + 0.01);
-    voice.source.onended = () => voice.gain.disconnect();
+    voice.source.onended = voice.cleanup;
   }
 
   _stealOldestVoice(when) {
@@ -242,11 +273,11 @@ export class AudioEngine {
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
     const gain = this.ctx.createGain();
-    gain.gain.value = VOICE_GAIN;
+    gain.gain.value = this._gainForCell(cellIndex);
     source.connect(gain);
-    gain.connect(this.master);
+    const cleanup = this._buildVoiceChain(cellIndex, gain);
     source.start();
-    source.onended = () => gain.disconnect();
+    source.onended = cleanup;
   }
 }
 
@@ -289,6 +320,7 @@ export function makeRecipe(cellIndex, config) {
 
   const noiseSeed = Math.floor(rng() * 0x7fffffff);
   const detune = Math.pow(2, ((rng() * 2 - 1) * 10) / 1200); // ±10 cents
+  const gainTrim = 0.85 + rng() * 0.3; // ±~1.4 dB of per-cell level variation
 
   // Category: percussion gathers in the bottom rows when geographic.
   const percProb = geo ? (row >= rows - 2 ? 0.5 : 0.02) : 0.1;
@@ -305,6 +337,7 @@ export function makeRecipe(cellIndex, config) {
       decay: 0.8 + rng() * 0.5,
       peak,
       noiseSeed,
+      gainTrim,
     };
   }
 
@@ -323,6 +356,7 @@ export function makeRecipe(cellIndex, config) {
       timbre: makeTimbre(voice, rng),
       peak: VOICE_PEAKS[voice],
       noiseSeed,
+      gainTrim,
     };
   }
 
@@ -347,6 +381,7 @@ export function makeRecipe(cellIndex, config) {
     timbre: makeTimbre(voice, rng),
     peak: VOICE_PEAKS[voice],
     noiseSeed,
+    gainTrim,
   };
 }
 
