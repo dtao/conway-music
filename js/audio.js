@@ -966,7 +966,11 @@ export function makeRecipe(cellIndex, config) {
 
   // Category: percussion gathers in the bottom rows when geographic.
   const percProb = geo ? (row >= rows - 2 ? 0.5 : 0.02) : 0.1;
-  const seqProb = sequences.length > 0 ? 0.15 : 0;
+  // The rhythmic-layer grids (dotted values) already differ from the
+  // primary lattice, so their cells play exactly one note per step — no
+  // sub-rhythms (and no composed sequences, which carry internal rhythm).
+  const oneNotePerStep = stepBeats !== 1;
+  const seqProb = sequences.length > 0 && !oneNotePerStep ? 0.15 : 0;
   const roll = rng();
 
   if (roll < percProb) {
@@ -974,7 +978,9 @@ export function makeRecipe(cellIndex, config) {
     return {
       type: "perc",
       instrument,
-      rhythm: PERC_RHYTHMS[Math.floor(rng() * PERC_RHYTHMS.length)],
+      rhythm: oneNotePerStep
+        ? "1000"
+        : PERC_RHYTHMS[Math.floor(rng() * PERC_RHYTHMS.length)],
       pitch: 0.8 + rng() * 0.5,
       decay: 0.8 + rng() * 0.5,
       peak,
@@ -1018,9 +1024,10 @@ export function makeRecipe(cellIndex, config) {
   // other voices repeat their per-step rhythm on chord tones.
   if (mode.progression) {
     const sustain = voice === "pad";
-    const rhythm = sustain
-      ? "1000"
-      : MELODIC_RHYTHMS[Math.floor(rng() * MELODIC_RHYTHMS.length)];
+    const rhythm =
+      sustain || oneNotePerStep
+        ? "1000"
+        : MELODIC_RHYTHMS[Math.floor(rng() * MELODIC_RHYTHMS.length)];
     const onsets = sustain ? 1 : parseRhythm(rhythm).length;
     const scaleArr = mode.scale || SCALE;
     // Resolve each bar's picks straight to semitones so pool entries can
@@ -1058,7 +1065,7 @@ export function makeRecipe(cellIndex, config) {
   // from the mode's weighted pool (a repeated draw makes a repeated-note
   // figure, which is fine music).
   const base = pickNote(rng, mode, octave, geo ? col : null);
-  const isDuet = rng() < 0.5;
+  const isDuet = !oneNotePerStep && rng() < 0.5;
   const rhythm = isDuet
     ? MELODIC_RHYTHMS[1 + Math.floor(rng() * (MELODIC_RHYTHMS.length - 1))]
     : "1000";
