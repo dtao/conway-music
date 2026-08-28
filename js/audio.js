@@ -691,6 +691,64 @@ export class AudioEngine {
     if (oldestKey !== null) this.stopVoice(oldestKey, when);
   }
 
+  /**
+   * Audition a cell's full "song" (hold-to-listen): for chord cells, all
+   * bars of the progression stitched into one full-cycle loop; for
+   * everything else, the cell's own loop. Plays until auditionStop.
+   */
+  auditionStart(cellIndex) {
+    if (!this.ctx) return;
+    this.auditionStop();
+    let buffer;
+    const recipe = this.usesSynthBank ? this.recipeFor(cellIndex) : null;
+    if (recipe && recipe.type === "chord") {
+      buffer = this._fullCycleBuffer(cellIndex, recipe);
+    } else {
+      buffer = this.bufferForCell(cellIndex);
+    }
+    if (!buffer) return;
+
+    const source = this.ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    const gain = this.ctx.createGain();
+    const t = this.now;
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(this._gainForCell(cellIndex), t + ATTACK);
+    source.connect(gain);
+    const cleanup = this._buildVoiceChain(cellIndex, gain);
+    source.start(t);
+    this._audition = { source, gain, cleanup };
+  }
+
+  auditionStop() {
+    const audition = this._audition;
+    if (!audition) return;
+    this._audition = null;
+    const t = this.now;
+    audition.gain.gain.cancelScheduledValues(t);
+    audition.gain.gain.setTargetAtTime(0, t, 0.06);
+    audition.source.stop(t + 0.4);
+    audition.source.onended = audition.cleanup;
+  }
+
+  /** Concatenate a chord cell's per-bar buffers into one full-cycle buffer. */
+  _fullCycleBuffer(cellIndex, recipe) {
+    const sr = this.ctx.sampleRate;
+    const barSeconds = recipe.barBeats * (60 / this._synthBpm);
+    const barLength = Math.round(barSeconds * sr);
+    const bars = recipe.barSemis.length;
+    const out = this.ctx.createBuffer(1, barLength * bars, sr);
+    const data = out.getChannelData(0);
+    for (let bar = 0; bar < bars; bar++) {
+      const src = this.bufferForCell(cellIndex, bar).getChannelData(0);
+      const start = bar * barLength;
+      // Step-length loops tile across their bar; bar-length pads copy once.
+      for (let i = 0; i < barLength; i++) data[start + i] = src[i % src.length];
+    }
+    return out;
+  }
+
   /** One-shot (non-looping) playback, used to preview a cell's sound. */
   preview(cellIndex) {
     const buffer = this.bufferForCell(cellIndex);

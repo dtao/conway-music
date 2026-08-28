@@ -695,38 +695,113 @@ function roundRect(c, x, y, w, h, r) {
 // ---------------------------------------------------------------------------
 // Input
 
+// A press can become three things: a quick tap (toggle, on release), a
+// drag (paint, from the first move onto another cell), or a stationary
+// hold (audition the cell's full song until release).
+const LONG_PRESS_MS = 400;
 let painting = false;
 let paintValue = true;
 let paintGrid = 0;
+let pendingTap = null; // { g, col, row, value } awaiting release or drag
+let longPressTimer = null;
+let auditionId = null; // non-null while hold-to-listen is active
+
+function sameCell(a, b) {
+  return a.g === b.g && a.col === b.col && a.row === b.row;
+}
+
+function cancelLongPress() {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+}
+
+function stopAudition() {
+  if (auditionId === null) return;
+  auditionId = null;
+  if (audio.ctx) audio.auditionStop();
+}
 
 canvas.addEventListener("pointerdown", (e) => {
   dismissIntro();
   ensureAudio();
   const cell = cellAt(e.clientX, e.clientY);
   if (!cell) return;
-  painting = true;
-  paintGrid = cell.g;
-  paintValue = lifes[cell.g].get(cell.col, cell.row) !== 1;
-  toggleCell(cell.g, cell.col, cell.row, paintValue);
   canvas.setPointerCapture(e.pointerId);
+  pendingTap = { ...cell, value: lifes[cell.g].get(cell.col, cell.row) !== 1 };
+  longPressTimer = setTimeout(() => {
+    longPressTimer = null;
+    const held = pendingTap;
+    pendingTap = null;
+    if (!held) return;
+    auditionId = globalId(held.g, lifes[held.g].index(held.col, held.row));
+    ensureAudio().then(() => {
+      if (auditionId !== null) audio.auditionStart(auditionId);
+    });
+  }, LONG_PRESS_MS);
 });
 
 canvas.addEventListener("pointermove", (e) => {
   const cell = cellAt(e.clientX, e.clientY);
   hoverGrid = cell ? cell.g : -1;
   hoverCell = cell ? lifes[cell.g].index(cell.col, cell.row) : -1;
+
+  if (auditionId !== null) {
+    // Slide while holding to audition neighboring cells.
+    if (cell) {
+      const id = globalId(cell.g, lifes[cell.g].index(cell.col, cell.row));
+      if (id !== auditionId) {
+        auditionId = id;
+        if (audio.ctx) audio.auditionStart(id);
+      }
+    }
+    return;
+  }
+
+  if (pendingTap && cell && !sameCell(cell, pendingTap)) {
+    // The press became a drag: commit the start cell and start painting.
+    cancelLongPress();
+    painting = true;
+    paintGrid = pendingTap.g;
+    paintValue = pendingTap.value;
+    toggleCell(pendingTap.g, pendingTap.col, pendingTap.row, paintValue);
+    pendingTap = null;
+  }
   // A paint stroke stays on the grid it started on.
   if (painting && cell && cell.g === paintGrid) {
     toggleCell(cell.g, cell.col, cell.row, paintValue);
   }
 });
 
-canvas.addEventListener("pointerup", () => (painting = false));
+canvas.addEventListener("pointerup", () => {
+  cancelLongPress();
+  if (pendingTap) {
+    // A quick tap: the toggle lands on release.
+    toggleCell(pendingTap.g, pendingTap.col, pendingTap.row, pendingTap.value);
+    pendingTap = null;
+  }
+  stopAudition();
+  painting = false;
+});
+
+canvas.addEventListener("pointercancel", () => {
+  cancelLongPress();
+  pendingTap = null;
+  stopAudition();
+  painting = false;
+});
+
 canvas.addEventListener("pointerleave", () => {
   hoverGrid = -1;
   hoverCell = -1;
+  cancelLongPress();
+  pendingTap = null;
+  stopAudition();
   painting = false;
 });
+
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
 playButton.addEventListener("click", () => {
   dismissIntro();
