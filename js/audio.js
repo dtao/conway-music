@@ -34,7 +34,12 @@ export class AudioEngine {
     this.master = null;
     this.bankLabel = "";
     this.voices = new Map(); // cell index -> { source, gain, startedAt }
-    this.maxVoices = config.maxVoices || 64;
+    // Polyphony cap. "auto" (the default) starts conservative, is
+    // calibrated by a render benchmark at init, and is then adjusted at
+    // runtime by the governor in main.js as it watches real performance.
+    this.autoVoices = config.maxVoices === "auto" || config.maxVoices == null;
+    this.maxVoices = this.autoVoices ? 48 : config.maxVoices;
+    this._pressure = 0; // times the cap silenced or stole a voice
     this.fileBuffers = null; // non-null => file mode
     this.recipes = new Map(); // cell index -> recipe (synth mode)
     this.bufferCache = new Map(); // cell index -> rendered AudioBuffer
@@ -64,6 +69,60 @@ export class AudioEngine {
     compressor.connect(this.ctx.destination);
 
     await this._loadBank(bpm);
+    if (this.autoVoices) this._benchmarkVoiceCap();
+  }
+
+  /**
+   * Calibrate the initial polyphony cap by timing real buffer renders (the
+   * work also doubles as prewarming). Fast machines land near the top of
+   * the range, weak ones near the bottom; the runtime governor refines it.
+   */
+  _benchmarkVoiceCap() {
+    if (!this.usesSynthBank) return;
+    const t0 = performance.now();
+    let rendered = 0;
+    for (let i = 0; i < 12 && performance.now() - t0 < 50; i++) {
+      this.bufferForCell(i, 0);
+      rendered++;
+    }
+    const msPerBuffer = Math.max(0.4, (performance.now() - t0) / Math.max(1, rendered));
+    this.maxVoices = Math.max(32, Math.min(160, Math.round(120 / msPerBuffer) + 24));
+  }
+
+  setVoiceCap(n) {
+    this.maxVoices = Math.max(24, Math.min(192, Math.round(n)));
+  }
+
+  /** Cap pressure (voices silenced or stolen) since the last call. */
+  takeCapPressure() {
+    const n = this._pressure;
+    this._pressure = 0;
+    return n;
+  }
+
+  /** Whether this cell's voice is actually sounding (vs. over the cap). */
+  isAudible(cellIndex) {
+    return this.voices.has(cellIndex);
+  }
+
+  /**
+   * Give voices to alive-but-silent cells of one grid, up to the cap,
+   * without stealing. Called at that grid's step boundaries so returning
+   * cells rejoin in phase; this is how cells muted by the cap come back
+   * when capacity frees up or the governor raises the cap.
+   */
+  auditionSilent(gridIndex, cells, time, bar, masterBeat) {
+    if (!this.ctx) return;
+    for (let i = 0; i < cells.length; i++) {
+      if (!cells[i]) continue;
+      const id = gridIndex * this.cellCount + i;
+      if (this.voices.has(id)) continue;
+      if (this.voices.size >= this.maxVoices) {
+        this._pressure++;
+        return;
+      }
+      this.startVoice(id, time, bar, masterBeat);
+    }
   }
 
   get now() {
@@ -461,6 +520,7 @@ export class AudioEngine {
   }
 
   _stealOldestVoice(when) {
+    this._pressure++;
     let oldestKey = null;
     let oldestTime = Infinity;
     for (const [key, voice] of this.voices) {

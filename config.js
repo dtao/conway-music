@@ -43,9 +43,13 @@ window.CONWAY_MUSIC_CONFIG = {
   // layout is stable across reloads. Change the seed for a new layout.
   assignmentSeed: 42,
 
-  // Safety cap on simultaneously sounding cells (oldest voices are the
-  // quietest casualties of a very crowded board).
-  maxVoices: 64,
+  // Cap on simultaneously sounding cells. "auto" (recommended) calibrates
+  // it to the machine: a render benchmark sets the starting cap and a
+  // runtime governor raises it while playback stays smooth or lowers it
+  // under stress, so powerful systems get more voices. Set a number to pin
+  // it. Alive cells silenced by the cap render dimmed, and rejoin (in
+  // phase, at their grid's next step) when capacity frees up.
+  maxVoices: "auto",
 
   // Lead overlays: up to two monophonic sustained solo voices floating
   // above the grid (lead 1 clarinet-ish, lead 2 a warmer cello-ish voice

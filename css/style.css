@@ -122,6 +122,8 @@ body {
   bottom: 1rem;
   transform: translateX(-50%);
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   align-items: center;
   gap: 0.6rem;
   padding: 0.55rem 0.9rem;
@@ -130,7 +132,7 @@ body {
   border-radius: 0.75rem;
   z-index: 10;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
-  white-space: nowrap;
+  max-width: calc(100vw - 1rem);
 }
 
 button {
@@ -224,11 +226,3 @@ button.primary:hover {
   font-variant-numeric: tabular-nums;
 }
 
-@media (max-width: 720px) {
-  #controls {
-    flex-wrap: wrap;
-    justify-content: center;
-    max-width: calc(100vw - 1rem);
-    white-space: normal;
-  }
-}

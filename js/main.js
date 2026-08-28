@@ -8,7 +8,7 @@ const DEFAULTS = {
   grid: { cols: 36, rows: 22 },
   bpm: 96,
   assignmentSeed: 42,
-  maxVoices: 64,
+  maxVoices: "auto",
   sequences: [],
   geographic: false,
   soundMode: "famcg",
@@ -113,7 +113,7 @@ let audioReady = null;
 function ensureAudio() {
   if (!audioReady) {
     audioReady = audio.init(bpm).then(() => {
-      soundbankLabel.textContent = audio.bankLabel;
+      updateBankLabel();
       // Visual timestamps recorded before init used performance.now();
       // from here on everything runs on the audio clock, so reset them.
       bornAt.fill(-Infinity);
@@ -202,6 +202,7 @@ function scheduleAhead() {
       }
     }
     if (best >= horizon) return;
+    if (best < audio.now - 0.03) governor.lateEvents++; // missed a deadline
     if (which === -1) {
       masterTick(nextMasterTime);
       nextMasterTime += beatDuration();
@@ -218,6 +219,40 @@ function masterTick(time) {
   audio.overlayBeat(time, bpm, totalPopulation(), masterBeat);
   masterBeat++;
   if (totalPopulation() === 0 && !pendingSwaps) pause();
+}
+
+// ---------------------------------------------------------------------------
+// Voice governor: with maxVoices "auto", the polyphony cap follows measured
+// performance. A render benchmark at init sets the starting point; from
+// there, scheduler lateness or long frames pull the cap down, and sustained
+// clean running while the cap is under pressure pushes it back up.
+
+const governor = { lateEvents: 0, longFrames: 0, cleanStreak: 0, lastFrameTs: 0 };
+
+setInterval(() => {
+  if (!audio.autoVoices || !audio.ctx) return;
+  const pressure = audio.takeCapPressure();
+  if (!playing) {
+    governor.lateEvents = 0;
+    governor.longFrames = 0;
+    return;
+  }
+  const stressed = governor.lateEvents > 0 || governor.longFrames > 2;
+  if (stressed) {
+    audio.setVoiceCap(audio.maxVoices * 0.85);
+    governor.cleanStreak = 0;
+    updateBankLabel();
+  } else if (pressure > 0 && ++governor.cleanStreak >= 2) {
+    audio.setVoiceCap(audio.maxVoices + 8);
+    governor.cleanStreak = 0;
+    updateBankLabel();
+  }
+  governor.lateEvents = 0;
+  governor.longFrames = 0;
+}, 2000);
+
+function updateBankLabel() {
+  soundbankLabel.textContent = `${audio.bankLabel} · ${audio.maxVoices} voices`;
 }
 
 function scheduleStep(g, time, index) {
@@ -241,6 +276,9 @@ function scheduleStep(g, time, index) {
   for (const i of births) {
     audio.startVoice(globalId(g, i), time, bar, g === 0 ? index : 0);
   }
+  // Cells muted by the polyphony cap rejoin here, at their own step
+  // boundary and thus in phase, whenever capacity has freed up.
+  audio.auditionSilent(g, life.cells, time, bar, g === 0 ? index : 0);
 
   frameQueue.push({
     g,
@@ -503,6 +541,13 @@ function hueOf(id) {
 function render() {
   const now = audio.ctx ? audio.now : performance.now() / 1000;
 
+  // Long main-thread frames feed the voice governor's stress signal.
+  const frameTs = performance.now();
+  if (playing && governor.lastFrameTs > 0 && frameTs - governor.lastFrameTs > 90) {
+    governor.longFrames++;
+  }
+  governor.lastFrameTs = frameTs;
+
   // Apply any step snapshots whose audio time has arrived.
   while (frameQueue.length > 0 && frameQueue[0].time <= now) {
     const frame = frameQueue.shift();
@@ -559,11 +604,18 @@ function render() {
         const sat = perc ? 10 : 85;
 
         if (alive) {
-          const flash = Math.min(1, Math.max(0, 1 - (now - bornAt[id]) / 0.35));
-          const light = 55 + 20 * pulse + 20 * flash;
-          ctx2d.fillStyle = `hsl(${hue} ${sat}% ${Math.min(light, 88)}%)`;
-          roundRect(ctx2d, x, y, size, size, radius);
-          ctx2d.fill();
+          if (playing && !audio.isAudible(id)) {
+            // Alive but silenced by the polyphony cap: draw it diminished.
+            ctx2d.fillStyle = `hsl(${hue} ${Math.round(sat * 0.2)}% 34% / 0.7)`;
+            roundRect(ctx2d, x, y, size, size, radius);
+            ctx2d.fill();
+          } else {
+            const flash = Math.min(1, Math.max(0, 1 - (now - bornAt[id]) / 0.35));
+            const light = 55 + 20 * pulse + 20 * flash;
+            ctx2d.fillStyle = `hsl(${hue} ${sat}% ${Math.min(light, 88)}%)`;
+            roundRect(ctx2d, x, y, size, size, radius);
+            ctx2d.fill();
+          }
         } else {
           // Death ghost: fade out over a step instead of vanishing.
           const ghost = Math.max(0, 1 - (now - diedAt[id]) / (stepSec * 0.9));
