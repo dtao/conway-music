@@ -181,6 +181,8 @@ sounding right now. Pads hold one chord tone per bar.
 - **G–Bm–F–Am** — mixes F♯ (in Bm) and F natural (in F) via per-note
   semitone offsets in the chord pools, with sparse high A, E, and B
   color tones.
+- **D–Dm–A–A** — D major melting into D minor (F♯ flattening to F),
+  resolving to two bars of A major with sparse G♯ and B color.
 
 Four earlier scale-field modes (A minor field, C major triads, E dorian
 drift, Whole-tone dream) remain in the code marked `hidden: true` —

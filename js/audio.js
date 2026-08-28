@@ -925,6 +925,34 @@ export const SOUND_MODES = {
     notes: [0, 1, 2, 3, 4, 5, 6].map((degree) => ({ degree, weight: 1 })),
     sequences: [],
   },
+  ddmaa: {
+    label: "D–Dm–A–A",
+    // D major melting into D minor, resolving to two bars of A major.
+    // Based on the A major scale A B C# D E F# G#; the Dm bar reaches F
+    // natural by flattening the F# degree. Degrees: 0=A 1=B 2=C# 3=D
+    // 4=E 5=F# 6=G#.
+    scale: [0, 2, 4, 5, 7, 9, 11],
+    barBeats: 4,
+    progression: [
+      // D: D F# A.
+      { name: "D", pool: [3, 3, 3, 5, 5, 5, 0, 0, 0] },
+      // Dm: D F A dominant; B sparse.
+      {
+        name: "Dm",
+        pool: [
+          3, 3, 3,
+          { degree: 5, offset: -1 }, { degree: 5, offset: -1 }, { degree: 5, offset: -1 },
+          0, 0, 0, 1,
+        ],
+      },
+      // A: A C# E dominant; G# and B sparse.
+      { name: "A", pool: [0, 0, 0, 2, 2, 2, 4, 4, 4, 6, 1] },
+      // A again: just the triad.
+      { name: "A", pool: [0, 0, 0, 2, 2, 2, 4, 4, 4] },
+    ],
+    notes: [0, 1, 2, 3, 4, 5, 6].map((degree) => ({ degree, weight: 1 })),
+    sequences: [],
+  },
   wholetone: {
     label: "Whole-tone dream",
     hidden: true,
