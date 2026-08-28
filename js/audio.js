@@ -21,7 +21,7 @@
 const ATTACK = 0.008;
 const RELEASE = 0.05;
 const VOICE_GAIN = 0.28;
-const MAX_CACHED_BUFFERS = 256;
+const MAX_CACHED_SECONDS = 480; // ~85MB of mono float buffers
 
 export class AudioEngine {
   constructor(config, cellValues) {
@@ -114,7 +114,7 @@ export class AudioEngine {
    * voices harmonize rather than double each other. Synth mode only
    * (file buffers carry no pitch data).
    */
-  overlayBeat(time, bpm, population) {
+  overlayBeat(time, bpm, population, beatIndex = 0) {
     if (!this.ctx || !this.usesSynthBank) return;
     if (!this.leadsEnabled[0] && !this.leadsEnabled[1]) {
       this._killLead(0);
@@ -126,10 +126,21 @@ export class AudioEngine {
     const cutoff = time - LEAD_WINDOW_BEATS * beat;
     const state = this._leadState;
 
+    let mode = SOUND_MODES[this.config.soundMode] || SOUND_MODES.minor;
+    let bar = 0;
+    if (mode.progression) {
+      bar = Math.floor(beatIndex / mode.barBeats) % mode.progression.length;
+      // Snap the leads to the tones of the chord sounding right now.
+      mode = {
+        scale: mode.scale,
+        notes: mode.progression[bar].pool.map((degree) => ({ degree, weight: 1 })),
+      };
+    }
+
     const semitones = [];
     for (const cellIndex of this.voices.keys()) {
       const recipe = this.recipeFor(cellIndex);
-      for (const s of recipeSemitones(recipe)) semitones.push(s);
+      for (const s of recipeSemitones(recipe, bar)) semitones.push(s);
     }
     state.notes.push({ time, semitones });
     state.notes = state.notes.filter((h) => h.time > cutoff);
@@ -157,7 +168,6 @@ export class AudioEngine {
     else if (population < popAvg * 0.95) trend = 2; // shrinking -> the sixth
 
     const activity = Math.min(1, semitones.length / 10);
-    const mode = SOUND_MODES[this.config.soundMode] || SOUND_MODES.minor;
 
     for (let i = 0; i < 2; i++) {
       if (!this.leadsEnabled[i]) {
@@ -257,30 +267,47 @@ export class AudioEngine {
     return this.recipeFor(cellIndex).type;
   }
 
-  bufferForCell(cellIndex) {
+  bufferForCell(cellIndex, bar = 0) {
     if (this.fileBuffers) {
       const i = Math.floor(this.cellValues[cellIndex] * this.fileBuffers.length);
       return this.fileBuffers[i % this.fileBuffers.length];
     }
-    let buffer = this.bufferCache.get(cellIndex);
+    const recipe = this.recipeFor(cellIndex);
+    const key = recipe.type === "chord" ? `${cellIndex}:${bar}` : String(cellIndex);
+    let buffer = this.bufferCache.get(key);
     if (!buffer) {
-      buffer = renderRecipe(this.ctx, this.recipeFor(cellIndex), this._synthBpm);
-      this._cacheBuffer(cellIndex, buffer);
+      buffer = renderRecipe(this.ctx, recipe, this._synthBpm, bar);
+      this._cacheBuffer(key, buffer);
     }
     return buffer;
   }
 
-  _cacheBuffer(cellIndex, buffer) {
-    if (this.bufferCache.size >= MAX_CACHED_BUFFERS) {
-      // Evict the oldest cached buffer that isn't currently sounding.
-      for (const key of this.bufferCache.keys()) {
-        if (!this.voices.has(key)) {
-          this.bufferCache.delete(key);
-          break;
-        }
-      }
+  _cacheBuffer(key, buffer) {
+    // Evict oldest buffers of non-sounding cells until the cache fits.
+    // Keys are "cell" or "cell:bar"; parseInt recovers the cell either way.
+    let cached = 0;
+    for (const b of this.bufferCache.values()) cached += b.duration;
+    for (const [k, b] of this.bufferCache) {
+      if (cached + buffer.duration <= MAX_CACHED_SECONDS) break;
+      if (this.voices.has(parseInt(k, 10))) continue;
+      this.bufferCache.delete(k);
+      cached -= b.duration;
     }
-    this.bufferCache.set(cellIndex, buffer);
+    this.bufferCache.set(key, buffer);
+  }
+
+  /**
+   * Render buffers for (up to maxVoices of) the given alive cells before
+   * playback starts, so the first beat doesn't pay the whole render cost.
+   */
+  prewarm(cells) {
+    if (!this.ctx || !this.usesSynthBank) return;
+    let warmed = 0;
+    for (let i = 0; i < cells.length && warmed < this.maxVoices; i++) {
+      if (!cells[i]) continue;
+      this.bufferForCell(i);
+      warmed++;
+    }
   }
 
   /**
@@ -314,12 +341,30 @@ export class AudioEngine {
     };
   }
 
-  /** Start a cell's looping voice at audio-clock time `when`. */
-  startVoice(cellIndex, when) {
+  /**
+   * Start a cell's looping voice at audio-clock time `when`. `beatIndex`
+   * phase-locks chord-progression cells: the voice starts on the current
+   * bar's buffer (offset within it for sustained pads), and chordBarTick
+   * rotates it onto each subsequent bar.
+   */
+  startVoice(cellIndex, when, beatIndex = 0) {
     if (this.voices.has(cellIndex)) return;
     if (this.voices.size >= this.maxVoices) this._stealOldestVoice(when);
 
-    const buffer = this.bufferForCell(cellIndex);
+    let buffer;
+    let offset = 0;
+    if (this.usesSynthBank) {
+      const recipe = this.recipeFor(cellIndex);
+      if (recipe.type === "chord") {
+        const bar = Math.floor(beatIndex / recipe.barBeats) % recipe.barNotes.length;
+        buffer = this.bufferForCell(cellIndex, bar);
+        if (recipe.sustain) offset = (beatIndex % recipe.barBeats) * (60 / this._synthBpm);
+      } else {
+        buffer = this.bufferForCell(cellIndex);
+      }
+    } else {
+      buffer = this.bufferForCell(cellIndex);
+    }
     if (!buffer) return;
 
     const source = this.ctx.createBufferSource();
@@ -332,9 +377,37 @@ export class AudioEngine {
 
     source.connect(gain);
     const cleanup = this._buildVoiceChain(cellIndex, gain);
-    source.start(when);
+    source.start(when, offset);
 
     this.voices.set(cellIndex, { source, gain, cleanup, startedAt: when });
+  }
+
+  /**
+   * Rotate every chord-mode voice onto the next bar's buffer, scheduled
+   * sample-accurately at `time`. Call once per beat; no-ops off bar
+   * boundaries and outside progression modes.
+   */
+  chordBarTick(time, beatIndex) {
+    if (!this.ctx || !this.usesSynthBank) return;
+    const mode = SOUND_MODES[this.config.soundMode] || SOUND_MODES.minor;
+    if (!mode.progression) return;
+    if (beatIndex === 0 || beatIndex % mode.barBeats !== 0) return;
+    const bar = Math.floor(beatIndex / mode.barBeats) % mode.progression.length;
+
+    for (const [cellIndex, voice] of this.voices) {
+      const recipe = this.recipeFor(cellIndex);
+      if (recipe.type !== "chord") continue;
+      const buffer = this.bufferForCell(cellIndex, bar);
+      const source = this.ctx.createBufferSource();
+      source.buffer = buffer;
+      source.loop = true;
+      source.connect(voice.gain);
+      const old = voice.source;
+      old.stop(time);
+      old.onended = () => old.disconnect();
+      source.start(time);
+      voice.source = source;
+    }
   }
 
   /** Stop a cell's voice at audio-clock time `when` (short fade, no click). */
@@ -531,10 +604,16 @@ function semitoneOf(n, scale = SCALE) {
   return octave * 12 + scale[degree];
 }
 
-/** The semitones a recipe sounds (memoized on the recipe; percussion: none). */
-function recipeSemitones(recipe) {
-  if (recipe._semitones) return recipe._semitones;
+/**
+ * The semitones a recipe sounds (memoized on the recipe; percussion: none).
+ * Chord recipes sound different notes per bar, so `bar` selects which.
+ */
+function recipeSemitones(recipe, bar = 0) {
   const scale = recipe.scale || SCALE;
+  if (recipe.type === "chord") {
+    return recipe.barNotes[bar % recipe.barNotes.length].map((d) => semitoneOf(d, scale));
+  }
+  if (recipe._semitones) return recipe._semitones;
   let semis = [];
   if (recipe.type === "melodic") {
     semis = recipe.degrees.map((d) => semitoneOf(d, scale));
@@ -618,6 +697,24 @@ export const SOUND_MODES = {
       { voice: "chip", seq: "5.7.'2.7." },
       { voice: "pad", seq: "5---7---'2------" },
     ],
+  },
+  famcg: {
+    label: "F–Am–C–G",
+    // A chord progression, one bar (4 beats) per chord, 16 beats per cycle.
+    // Every melodic cell renders one small buffer per bar (notes from that
+    // bar's pool) and the engine swaps each voice's buffer sample-accurately
+    // at bar boundaries, so the whole board tracks the progression.
+    // Degrees (A minor scale): 0=A 1=B 2=C 3=D 4=E 5=F 6=G.
+    barBeats: 4,
+    progression: [
+      { name: "F", pool: [5, 0, 1, 2, 4] }, // F A B C E
+      { name: "Am", pool: [0, 1, 2, 4] }, // A B C E
+      { name: "C", pool: [2, 4, 6, 1] }, // C E G B
+      { name: "G", pool: [6, 1, 3, 5] }, // G B D F
+    ],
+    // Union of the chord pools; used as the fallback snapping set.
+    notes: [0, 1, 2, 3, 4, 5, 6].map((degree) => ({ degree, weight: 1 })),
+    sequences: [],
   },
   wholetone: {
     label: "Whole-tone dream",
@@ -737,13 +834,49 @@ export function makeRecipe(cellIndex, config) {
     };
   }
 
-  // Melodic figure: a single note or a two-note duet, both notes drawn
-  // from the mode's weighted pool (a repeated draw makes a repeated-note
-  // figure, which is fine music).
   const voice = geo
     ? band[0][Math.floor(rng() * band[0].length)]
     : VOICE_POOL[Math.floor(rng() * VOICE_POOL.length)];
   const octave = geo ? band[1] : Math.floor(rng() * 4);
+
+  // Chord-progression mode: the cell renders a full-cycle figure whose
+  // notes follow each bar's chord pool. Pads hold one note per bar;
+  // other voices repeat their per-beat rhythm on chord tones.
+  if (mode.progression) {
+    const sustain = voice === "pad";
+    const rhythm = sustain
+      ? "1000"
+      : MELODIC_RHYTHMS[Math.floor(rng() * MELODIC_RHYTHMS.length)];
+    const onsets = sustain ? 1 : parseRhythm(rhythm).length;
+    const barNotes = mode.progression.map((chord) => {
+      const notes = [];
+      for (let n = 0; n < onsets; n++) {
+        const degree = geo
+          ? chord.pool[(col + n) % chord.pool.length]
+          : chord.pool[Math.floor(rng() * chord.pool.length)];
+        notes.push(octave * DEGREES + degree);
+      }
+      return notes;
+    });
+    return {
+      type: "chord",
+      voice,
+      rhythm,
+      sustain,
+      barNotes,
+      barBeats: mode.barBeats,
+      scale: mode.scale || SCALE,
+      detune,
+      timbre: makeTimbre(voice, rng),
+      peak: VOICE_PEAKS[voice],
+      noiseSeed,
+      gainTrim,
+    };
+  }
+
+  // Melodic figure: a single note or a two-note duet, both notes drawn
+  // from the mode's weighted pool (a repeated draw makes a repeated-note
+  // figure, which is fine music).
   const base = pickNote(rng, mode, octave, geo ? col : null);
   const isDuet = rng() < 0.5;
   const rhythm = isDuet
@@ -809,7 +942,7 @@ function degreeHz(n, scale = SCALE) {
 const MELODIC_VOICES = { pluck, muted: pluck, bell, pad, chip };
 const PERC_VOICES = { kick, snare, hat, shaker, block, tom };
 
-function renderRecipe(ctx, recipe, bpm) {
+function renderRecipe(ctx, recipe, bpm, bar = 0) {
   const beat = 60 / bpm;
   const sampleRate = ctx.sampleRate;
   const rng = mulberry32(recipe.noiseSeed);
@@ -825,6 +958,20 @@ function renderRecipe(ctx, recipe, bpm) {
       ...n,
       degree: recipe.degrees[Math.min(i, recipe.degrees.length - 1)],
     }));
+  } else if (recipe.type === "chord") {
+    // One bar's worth: a 1-beat loop of the cell's rhythm on this bar's
+    // notes, or a whole-bar sustained note for pads. The engine swaps the
+    // voice onto the next bar's buffer at each bar boundary.
+    const barNotes = recipe.barNotes[bar % recipe.barNotes.length];
+    if (recipe.sustain) {
+      beats = recipe.barBeats;
+      notes = [{ onset: 0, dur: recipe.barBeats, degree: barNotes[0] }];
+    } else {
+      notes = parseRhythm(recipe.rhythm).map((n, i) => ({
+        ...n,
+        degree: barNotes[Math.min(i, barNotes.length - 1)],
+      }));
+    }
   } else {
     notes = parseRhythm(recipe.rhythm);
   }

@@ -43,6 +43,7 @@ const audio = new AudioEngine(config, soundValues);
 let bpm = config.bpm;
 let playing = false;
 let firstBeatPending = false;
+let beatCounter = 0; // beats since play started; phase for chord-mode cells
 let nextBeatTime = 0;
 let schedulerTimer = null;
 
@@ -121,7 +122,10 @@ async function play() {
   // Synth figures are rendered to fit one beat, so retune the bank if the
   // tempo changed since it was built (no voices are looping while paused).
   audio.rebuildSynthBank(bpm);
+  // Render the starting cells' buffers up front so the first beat is clean.
+  audio.prewarm(grid.cells);
   playing = true;
+  beatCounter = 0;
   firstBeatPending = true;
   nextBeatTime = audio.now + 0.08;
   beatQueue = [];
@@ -164,8 +168,10 @@ function scheduleBeat(time) {
   }
 
   for (const i of deaths) audio.stopVoice(i, time);
-  for (const i of births) audio.startVoice(i, time);
-  audio.overlayBeat(time, bpm, grid.population);
+  audio.chordBarTick(time, beatCounter);
+  for (const i of births) audio.startVoice(i, time, beatCounter);
+  audio.overlayBeat(time, bpm, grid.population, beatCounter);
+  beatCounter++;
 
   beatQueue.push({
     time,
@@ -190,7 +196,7 @@ function toggleCell(col, row, forceAlive = null) {
 
   if (playing && audio.ctx) {
     // Live editing: the cell joins or leaves the music immediately.
-    if (alive) audio.startVoice(i, audio.now);
+    if (alive) audio.startVoice(i, audio.now, beatCounter);
     else audio.stopVoice(i, audio.now);
     if (viewCells !== grid.cells) viewCells[i] = alive ? 1 : 0;
     // Snapshots already queued for upcoming beats predate this edit.

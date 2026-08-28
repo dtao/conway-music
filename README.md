@@ -131,6 +131,13 @@ switches the note pool melodic cells draw from:
 - **E dorian drift** — dominated by E, G, and B, with F♯, C♯, and D
   appearing sparsely and only in the upper registers. F♯ and C♯ live
   outside A natural minor, so this mode carries its own scale.
+- **F–Am–C–G** — a chord progression, one bar (4 beats) per chord over a
+  16-beat cycle. Every melodic cell becomes a riff that follows the
+  changes: it keeps its own rhythm, voice, and timbre, but draws its
+  notes from the current chord's pool (F: F A B C E · Am: A B C E · C:
+  C E G B · G: G B D F). Cells born mid-cycle join in phase — the whole
+  board tracks the progression — and the lead overlays snap to the tones
+  of the chord sounding right now. Pads hold one chord tone per bar.
 - **Whole-tone dream** — C, D, E, F♯, G♯, A♯, all equally weighted: the
   whole-tone scale, where the leads' 3rd/6th harmonies snap to major
   thirds and augmented fifths for a floating, Debussy-like haze.
