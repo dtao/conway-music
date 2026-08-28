@@ -504,6 +504,13 @@ export class AudioEngine {
     this._fadeOut(voice, when);
   }
 
+  /** Stop every voice belonging to one grid (used when a grid is disabled). */
+  stopGridVoices(gridIndex, when = this.now) {
+    for (const cellIndex of [...this.voices.keys()]) {
+      if (this._gridOf(cellIndex) === gridIndex) this.stopVoice(cellIndex, when);
+    }
+  }
+
   stopAllVoices(when = this.now) {
     for (const voice of this.voices.values()) this._fadeOut(voice, when);
     this.voices.clear();

@@ -110,8 +110,11 @@ its notes from the chord sounding when its step begins, so the layers
 follow the changes together no matter how their steps straddle the bar
 lines. Whole-bar pads stay on the quarter-note grid (the rhythmic
 layers trade them for muted plucks), painting works on any grid, Random
-reseeds all visible grids, riffs stamp the first, and shared URLs
-capture every layer.
+reseeds all visible grids, riffs stamp every visible grid (the same
+formation phasing against itself at three rates), and shared URLs
+capture every layer. Changing the grid count mid-play keeps the music
+going: a joining grid comes in on its own lattice in phase, a leaving
+one falls silent.
 
 ### Voice families
 

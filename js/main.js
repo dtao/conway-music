@@ -422,11 +422,32 @@ function updateGenerationLabel() {
 
 function setGridCount(n) {
   if (n === gridCount) return;
-  // A different grid layout restructures the ensemble: stop, like a mode
-  // change, and let the user restart deliberately.
-  if (playing) pause();
+  const prev = gridCount;
   gridCount = n;
   gridButtons.forEach((button, i) => button.classList.toggle("active", i + 1 === n));
+
+  if (playing) {
+    // The music carries on. A joining grid starts at the next point on its
+    // own step lattice (in phase with the master clock, so its cells come
+    // in chord-correct via the first-step announcement); a leaving grid's
+    // voices stop now.
+    const beatSec = beatDuration();
+    for (let g = prev; g < n; g++) {
+      const k = Math.ceil((masterBeat - 1e-9) / STEP_BEATS[g]);
+      stepIndex[g] = k;
+      nextStepTime[g] = nextMasterTime + (k * STEP_BEATS[g] - masterBeat) * beatSec;
+      firstStepPending[g] = true;
+    }
+    for (let g = n; g < prev; g++) {
+      if (audio.ctx) audio.stopGridVoices(g, audio.now);
+    }
+    frameQueue = frameQueue.filter((frame) => frame.g < n);
+    for (let g = n; g < MAX_GRIDS; g++) {
+      view[g].cells = lifes[g].cells;
+      view[g].generation = lifes[g].generation;
+    }
+  }
+
   resize();
   syncHash();
 }
@@ -788,10 +809,13 @@ presetSelect.addEventListener("change", () => {
   const preset = PRESETS[Number(presetSelect.value)];
   if (!preset) return;
   dismissIntro();
-  // Riffs stamp the primary (quarter-note) grid.
+  // Riffs stamp every visible grid: the same formation stepping at three
+  // rates phases against itself.
   replaceBoards(() => {
-    lifes[0].clear();
-    stampPreset(lifes[0], preset);
+    for (const life of visibleLifes()) {
+      life.clear();
+      stampPreset(life, preset);
+    }
   });
   // Reset to the placeholder so the same riff can be re-picked later.
   presetSelect.value = "";
