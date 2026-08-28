@@ -113,6 +113,26 @@ layers trade them for muted plucks), painting works on any grid, Random
 reseeds all visible grids, riffs stamp the first, and shared URLs
 capture every layer.
 
+### Voice families
+
+The **family selector** in the control bar (or `voiceFamily` in
+`config.js`) swaps the instrument palette every cell draws from while
+keeping the rest of a cell's recipe (notes, rhythm, register) intact:
+
+- **Classic** — the original bank: Karplus–Strong plucks, FM bells,
+  additive pads, chip pulses.
+- **Orchestral** — pizzicato, staccato and sustained strings, horns,
+  and breathy flutes.
+- **Wavesynth** — FM electric piano, glassy inharmonic FM, square
+  stabs, supersaw-ish pads, wide-ranging PWM.
+- **8-bit** — pulse waves at 50/25/12.5% duty and struck or sustained
+  triangles.
+
+Percussion is shared across families. Families are data
+(`VOICE_FAMILIES` in `js/audio.js`): a mapping from the five voice
+roles onto the synthesis primitives with per-cell timbre distributions
+— add an entry and it appears in the selector.
+
 ### Lead overlays
 
 The **Leads** panel above the grid toggles up to two solo voices that

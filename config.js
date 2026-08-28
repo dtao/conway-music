@@ -59,6 +59,15 @@ window.CONWAY_MUSIC_CONFIG = {
   // top panel (or L / shift+L). Off by default.
   leads: [false, false],
 
+  // Voice family: the instrument palette cells draw from. "classic" is
+  // the original bank (plucks, FM bells, pads, chips); "orchestral" trades
+  // it for pizzicato, staccato and sustained strings, horn, and flute;
+  // "wavesynth" for FM e-piano, glassy FM, square stabs, and supersaw
+  // pads; "eightbit" for pulse waves and triangles. Percussion is shared.
+  // Families are data in js/audio.js (VOICE_FAMILIES) — add one there and
+  // it appears in the selector automatically.
+  voiceFamily: "classic",
+
   // Sound mode: which note pool melodic cells draw from. The dropdown
   // currently offers three chord progressions — "famcg" (F–Am–C–G),
   // "ema" (Em–A dorian vamp), and "cdbc" (C–D–Bm–C) — while the earlier

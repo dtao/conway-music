@@ -1,5 +1,5 @@
 import { LifeGrid } from "./life.js";
-import { AudioEngine, SOUND_MODES, mulberry32 } from "./audio.js";
+import { AudioEngine, SOUND_MODES, VOICE_FAMILIES, mulberry32 } from "./audio.js";
 import { encodeBoards, decodeFragment } from "./share.js";
 import { PRESETS, stampPreset } from "./patterns.js";
 
@@ -15,6 +15,7 @@ const DEFAULTS = {
   leads: [false, false],
   gridCount: 1,
   gridRhythms: [1, 1.5, 0.75],
+  voiceFamily: "classic",
 };
 
 const userConfig = window.CONWAY_MUSIC_CONFIG || {};
@@ -91,6 +92,7 @@ const clearButton = document.getElementById("clear");
 const shareButton = document.getElementById("share");
 const presetSelect = document.getElementById("presets");
 const modeSelect = document.getElementById("mode");
+const familySelect = document.getElementById("family");
 const leadButtons = [document.getElementById("lead1"), document.getElementById("lead2")];
 const gridButtons = [1, 2, 3].map((n) => document.getElementById(`grids${n}`));
 const collapseButton = document.getElementById("collapse");
@@ -673,6 +675,23 @@ for (const [id, mode] of Object.entries(SOUND_MODES)) {
   modeSelect.value = valid;
   config.soundMode = valid;
 }
+
+for (const [id, family] of Object.entries(VOICE_FAMILIES)) {
+  const option = document.createElement("option");
+  option.value = id;
+  option.textContent = family.label;
+  familySelect.appendChild(option);
+}
+familySelect.value = config.voiceFamily in VOICE_FAMILIES ? config.voiceFamily : "classic";
+config.voiceFamily = familySelect.value;
+
+familySelect.addEventListener("change", () => {
+  // A new instrument palette, like a new mode: stop and restart deliberately.
+  if (playing) pause();
+  config.voiceFamily = familySelect.value;
+  audio.resetRecipes();
+  familySelect.blur();
+});
 
 leadButtons.forEach((button, i) => {
   button.classList.toggle("active", audio.leadsEnabled[i]);

@@ -996,15 +996,17 @@ export function makeRecipe(cellIndex, config) {
       ? Math.max(-1, Math.min(1, band[1] - 1))
       : [-1, 0, 0, 1][Math.floor(rng() * 4)];
     const voice = entry.voice in VOICE_PEAKS ? entry.voice : "pluck";
+    const voicing = makeVoicing(voice, rng, config);
     return {
       type: "seq",
       voice,
+      render: voicing.render,
       seq: entry.seq,
       scale: mode.scale || SCALE,
       octaveShift,
       detune,
-      timbre: makeTimbre(voice, rng),
-      peak: VOICE_PEAKS[voice],
+      timbre: voicing.timbre,
+      peak: voicing.peak,
       noiseSeed,
       gainTrim,
       stepBeats,
@@ -1044,17 +1046,19 @@ export function makeRecipe(cellIndex, config) {
       }
       return semis;
     });
+    const voicing = makeVoicing(voice, rng, config);
     return {
       type: "chord",
       voice,
+      render: voicing.render,
       rhythm,
       sustain,
       barSemis,
       barBeats: mode.barBeats,
       scale: mode.scale || SCALE,
       detune,
-      timbre: makeTimbre(voice, rng),
-      peak: VOICE_PEAKS[voice],
+      timbre: voicing.timbre,
+      peak: voicing.peak,
       noiseSeed,
       gainTrim,
       stepBeats,
@@ -1069,22 +1073,165 @@ export function makeRecipe(cellIndex, config) {
   const rhythm = isDuet
     ? MELODIC_RHYTHMS[1 + Math.floor(rng() * (MELODIC_RHYTHMS.length - 1))]
     : "1000";
+  const voicing = makeVoicing(voice, rng, config);
   return {
     type: "melodic",
     voice,
+    render: voicing.render,
     degrees: isDuet ? [base, pickNote(rng, mode, octave)] : [base],
     scale: mode.scale || SCALE,
     rhythm,
     detune,
-    timbre: makeTimbre(voice, rng),
-    peak: VOICE_PEAKS[voice],
+    timbre: voicing.timbre,
+    peak: voicing.peak,
     noiseSeed,
     gainTrim,
     stepBeats,
   };
 }
 
-/** Continuous per-cell timbre parameters for a melodic voice. */
+// ---------------------------------------------------------------------------
+// Voice families: each family maps the five voice roles (pluck, muted,
+// bell, pad, chip) onto the synthesis primitives (Karplus–Strong "pluck",
+// FM "bell", additive "pad", pulse "chip") with its own per-cell timbre
+// distributions. Percussion is shared across families. Add a family here
+// and it appears in the UI's family selector automatically.
+
+function sawHarmonics(n, rng) {
+  const harmonics = [];
+  for (let h = 1; h <= n; h++) harmonics.push((1 / h) * (0.9 + rng() * 0.2));
+  return harmonics;
+}
+
+const TRIANGLE_HARMONICS = [1, 0, 1 / 9, 0, 1 / 25];
+
+export const VOICE_FAMILIES = {
+  classic: {
+    label: "Classic",
+    make(role, rng) {
+      return { render: role === "muted" ? "pluck" : role, timbre: makeTimbre(role, rng) };
+    },
+  },
+  orchestral: {
+    label: "Orchestral",
+    make(role, rng) {
+      switch (role) {
+        case "pluck": // pizzicato strings
+          return { render: "pluck", timbre: { damping: 0.976 + rng() * 0.01, smooth: 1 } };
+        case "muted": // staccato strings
+          return {
+            render: "pad",
+            timbre: {
+              harmonics: sawHarmonics(6, rng),
+              attackFrac: 0.04 + rng() * 0.04,
+              releaseFrac: 0.3,
+              decayTau: 0.5 + rng() * 0.3,
+            },
+            peakScale: 0.8,
+          };
+        case "bell": // horn
+          return {
+            render: "pad",
+            timbre: {
+              harmonics: [1, 0.55 + rng() * 0.2, 0.3, 0.12, 0.05],
+              attackFrac: 0.12 + rng() * 0.08,
+              releaseFrac: 0.25,
+            },
+            peakScale: 0.85,
+          };
+        case "pad": // string section
+          return {
+            render: "pad",
+            timbre: {
+              harmonics: sawHarmonics(8, rng),
+              attackFrac: 0.25 + rng() * 0.15,
+              releaseFrac: 0.25,
+            },
+          };
+        case "chip": // flute
+          return {
+            render: "pad",
+            timbre: {
+              harmonics: [1, 0.18 + rng() * 0.12, 0.05],
+              attackFrac: 0.1 + rng() * 0.08,
+              releaseFrac: 0.2,
+              breath: 0.15 + rng() * 0.1,
+            },
+            peakScale: 1.1,
+          };
+      }
+    },
+  },
+  wavesynth: {
+    label: "Wavesynth",
+    make(role, rng) {
+      switch (role) {
+        case "pluck": // FM electric piano
+          return {
+            render: "bell",
+            timbre: { ratio: 2.0, index: 2.5 + rng() * 1.5, decayFrac: 0.3 + rng() * 0.15 },
+          };
+        case "muted": // square stab
+          return { render: "chip", timbre: { width: 0.5, decayFrac: 0.25 + rng() * 0.15 } };
+        case "bell": // glassy inharmonic FM
+          return {
+            render: "bell",
+            timbre: { ratio: 5.07 + rng() * 0.9, index: 3 + rng() * 3, decayFrac: 0.35 + rng() * 0.2 },
+          };
+        case "pad": // supersaw-ish pad
+          return {
+            render: "pad",
+            timbre: {
+              harmonics: sawHarmonics(8, rng),
+              attackFrac: 0.2 + rng() * 0.2,
+              releaseFrac: 0.3,
+            },
+          };
+        case "chip": // wide-ranging PWM
+          return { render: "chip", timbre: { width: 0.1 + rng() * 0.4, decayFrac: 0.5 + rng() * 0.3 } };
+      }
+    },
+  },
+  eightbit: {
+    label: "8-bit",
+    make(role, rng) {
+      switch (role) {
+        case "pluck": // 50% square
+          return { render: "chip", timbre: { width: 0.5, decayFrac: 0.35 + rng() * 0.1 }, peakScale: 1.2 };
+        case "muted": // 25% pulse, clipped short
+          return { render: "chip", timbre: { width: 0.25, decayFrac: 0.2 + rng() * 0.08 } };
+        case "bell": // struck triangle
+          return {
+            render: "pad",
+            timbre: {
+              harmonics: TRIANGLE_HARMONICS,
+              attackFrac: 0.01,
+              releaseFrac: 0.05,
+              decayTau: 0.4 + rng() * 0.2,
+            },
+            peakScale: 1.2,
+          };
+        case "pad": // sustained triangle
+          return {
+            render: "pad",
+            timbre: { harmonics: TRIANGLE_HARMONICS, attackFrac: 0.02, releaseFrac: 0.1 },
+            peakScale: 1.2,
+          };
+        case "chip": // narrow 12.5% pulse
+          return { render: "chip", timbre: { width: 0.125, decayFrac: 0.5 + rng() * 0.2 } };
+      }
+    },
+  },
+};
+
+/** A cell's family-specific voicing: which primitive renders it, and how. */
+function makeVoicing(role, rng, config) {
+  const family = VOICE_FAMILIES[config.voiceFamily] || VOICE_FAMILIES.classic;
+  const v = family.make(role, rng) || { render: role, timbre: {} };
+  return { render: v.render, timbre: v.timbre, peak: VOICE_PEAKS[role] * (v.peakScale ?? 1) };
+}
+
+/** Continuous per-cell timbre parameters for a classic-family voice. */
 function makeTimbre(voice, rng) {
   switch (voice) {
     case "pluck":
@@ -1177,7 +1324,7 @@ function renderRecipe(ctx, recipe, bpm, bar = 0) {
     const render = PERC_VOICES[recipe.instrument];
     for (const note of notes) render(data, sampleRate, note.onset * unit, recipe, rng);
   } else {
-    const render = MELODIC_VOICES[recipe.voice] || pluck;
+    const render = MELODIC_VOICES[recipe.render || recipe.voice] || pluck;
     for (const note of notes) {
       const hz =
         note.semi !== undefined
@@ -1296,21 +1443,35 @@ function bell(data, sr, startSeconds, freq, dur, timbre) {
   }
 }
 
-/** Soft additive pad: a few harmonics under a slow attack/release envelope. */
-function pad(data, sr, startSeconds, freq, dur, timbre) {
+/**
+ * Additive voice: harmonics under an attack/release envelope, with two
+ * optional extras that let it cover more instruments — `decayTau` (a
+ * fraction of the note length) adds an exponential decay for struck or
+ * bowed-short characters, and `breath` mixes filtered noise into the
+ * attack for flute-like voices.
+ */
+function pad(data, sr, startSeconds, freq, dur, timbre, rng) {
   const harmonics = timbre.harmonics ?? [1, 0.4, 0.2, 0.1];
   const attack = dur * (timbre.attackFrac ?? 0.2);
   const release = dur * (timbre.releaseFrac ?? 0.25);
+  const decayTau = timbre.decayTau ? dur * timbre.decayTau : 0;
+  const breath = timbre.breath ?? 0;
   const start = Math.floor(startSeconds * sr);
   const length = Math.min(Math.floor(dur * sr), data.length - start);
+  let noise = 0;
   for (let i = 0; i < length; i++) {
     const t = i / sr;
     let env = 1;
     if (t < attack) env = t / attack;
     else if (t > dur - release) env = (dur - t) / release;
+    if (decayTau) env *= Math.exp(-t / decayTau);
     const w = 2 * Math.PI * freq * t;
     let sample = 0;
     for (let h = 0; h < harmonics.length; h++) sample += harmonics[h] * Math.sin((h + 1) * w);
+    if (breath > 0 && rng) {
+      noise = 0.7 * noise + 0.3 * (rng() * 2 - 1);
+      sample += breath * noise * Math.exp(-t / (dur * 0.3));
+    }
     data[start + i] += sample * env;
   }
 }
