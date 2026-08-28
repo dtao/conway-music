@@ -80,6 +80,15 @@ export class AudioEngine {
     this._synthBpm = bpm;
   }
 
+  /**
+   * Forget all recipes and rendered buffers so the next playback derives
+   * them fresh (used when the sound mode changes). Call while paused.
+   */
+  resetRecipes() {
+    this.recipes.clear();
+    this.bufferCache.clear();
+  }
+
   async _loadBank(bpm) {
     const audio = this.config.audio || {};
 
@@ -290,6 +299,65 @@ const SCALE = [0, 2, 3, 5, 7, 8, 10]; // A natural minor: A B C D E F G
 const ROOT_HZ = 110; // A2
 const DEGREES = SCALE.length;
 
+// Sound modes: each mode is a weighted pool of scale degrees (0=A 1=B 2=C
+// 3=D 4=E 5=F 6=G) that melodic material draws from, plus the composed
+// sequences it uses ("config" = the config.js sequences). `octaves`
+// restricts a note to a register. Add a mode here and it appears in the UI.
+export const SOUND_MODES = {
+  minor: {
+    label: "A minor field",
+    notes: [0, 1, 2, 3, 4, 5, 6].map((degree) => ({ degree, weight: 1 })),
+    sequences: "config",
+  },
+  cmajor: {
+    label: "C major triads",
+    notes: [
+      { degree: 2, weight: 6 }, // C
+      { degree: 4, weight: 6 }, // E
+      { degree: 6, weight: 6 }, // G
+      { degree: 3, weight: 1 }, // D, sparse
+      { degree: 0, weight: 1 }, // A, sparse
+      { degree: 1, weight: 2, octaves: [2, 3] }, // B, high registers only
+      // F sits out of this mode entirely.
+    ],
+    sequences: [
+      { voice: "pluck", seq: "3-5-7---" }, // C E G rise
+      { voice: "pluck", seq: "7-5-3---" }, // G E C fall
+      { voice: "pluck", seq: "3-5-7-'3-" }, // run up to high C
+      { voice: "muted", seq: "3--7--5-" }, // C G E tresillo
+      { voice: "bell", seq: "3--57--5" },
+      { voice: "bell", seq: "'2-'3-----" }, // high B resolving to C
+      { voice: "chip", seq: "3.5.7.5." },
+      { voice: "pad", seq: "3---5---7-------" },
+      { voice: "pluck", seq: "3-4-5---" }, // passing D
+      { voice: "pluck", seq: "5-3-1---" }, // E C A
+    ],
+  },
+};
+
+/**
+ * Weighted note pick from a mode's pool for a given octave (0-3). When
+ * `col` is given (geographic mode), the column indexes the pool's degrees
+ * in scale order instead, so left-to-right stays melodic.
+ */
+function pickNote(rng, mode, octave, col = null) {
+  const pool = mode.notes.filter(
+    (n) => !n.octaves || (octave >= n.octaves[0] && octave <= n.octaves[1])
+  );
+  const usable = pool.length > 0 ? pool : mode.notes;
+  if (col !== null) {
+    const sorted = [...usable].sort((a, b) => a.degree - b.degree);
+    return octave * DEGREES + sorted[col % sorted.length].degree;
+  }
+  const total = usable.reduce((sum, n) => sum + n.weight, 0);
+  let r = rng() * total;
+  for (const n of usable) {
+    r -= n.weight;
+    if (r <= 0) return octave * DEGREES + n.degree;
+  }
+  return octave * DEGREES + usable[usable.length - 1].degree;
+}
+
 const MELODIC_RHYTHMS = ["1000", "1010", "1001", "1100", "0110"];
 const PERC_RHYTHMS = ["1000", "1010", "1001", "1100", "0110", "0010", "1111"];
 const PERC_INSTRUMENTS = [
@@ -309,6 +377,7 @@ const GEO_BANDS = [
 
 export function makeRecipe(cellIndex, config) {
   const rng = mulberry32((config.assignmentSeed * 0x9e3779b9) ^ (cellIndex * 0x85ebca6b));
+  const mode = SOUND_MODES[config.soundMode] || SOUND_MODES.minor;
   const geo = !!config.geographic;
   const cols = config.grid.cols;
   const rows = config.grid.rows;
@@ -316,7 +385,7 @@ export function makeRecipe(cellIndex, config) {
   const col = cellIndex % cols;
   const height = rows > 1 ? 1 - row / (rows - 1) : 0.5; // 0 bottom, 1 top
   const band = GEO_BANDS[Math.min(3, Math.floor(height * 4))];
-  const sequences = config.sequences || [];
+  const sequences = mode.sequences === "config" ? config.sequences || [] : mode.sequences;
 
   const noiseSeed = Math.floor(rng() * 0x7fffffff);
   const detune = Math.pow(2, ((rng() * 2 - 1) * 10) / 1200); // ±10 cents
@@ -360,22 +429,22 @@ export function makeRecipe(cellIndex, config) {
     };
   }
 
-  // Melodic figure: a single note or a two-note duet.
+  // Melodic figure: a single note or a two-note duet, both notes drawn
+  // from the mode's weighted pool (a repeated draw makes a repeated-note
+  // figure, which is fine music).
   const voice = geo
     ? band[0][Math.floor(rng() * band[0].length)]
     : VOICE_POOL[Math.floor(rng() * VOICE_POOL.length)];
   const octave = geo ? band[1] : Math.floor(rng() * 4);
-  const degree = geo ? col % DEGREES : Math.floor(rng() * DEGREES);
-  const base = octave * DEGREES + degree;
+  const base = pickNote(rng, mode, octave, geo ? col : null);
   const isDuet = rng() < 0.5;
-  const steps = isDuet ? (1 + Math.floor(rng() * 3)) * (rng() < 0.5 ? 1 : -1) : 0;
   const rhythm = isDuet
     ? MELODIC_RHYTHMS[1 + Math.floor(rng() * (MELODIC_RHYTHMS.length - 1))]
     : "1000";
   return {
     type: "melodic",
     voice,
-    degrees: isDuet ? [base, base + steps] : [base],
+    degrees: isDuet ? [base, pickNote(rng, mode, octave)] : [base],
     rhythm,
     detune,
     timbre: makeTimbre(voice, rng),

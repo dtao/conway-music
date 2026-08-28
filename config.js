@@ -40,6 +40,13 @@ window.CONWAY_MUSIC_CONFIG = {
   // quietest casualties of a very crowded board).
   maxVoices: 64,
 
+  // Sound mode: which note pool melodic cells draw from. "minor" is the
+  // full A natural minor field; "cmajor" favors C/E/G triads with sparse
+  // D and A, B only in high registers, and its own triadic sequences.
+  // Modes are defined as data in js/audio.js (SOUND_MODES) — add one there
+  // and it appears in the UI's mode selector automatically.
+  soundMode: "minor",
+
   // Geographic mode: when true, a cell's position shapes its sound — rows
   // pick the register and voice family (sustained pads low, bright bells
   // and chips high), percussion gathers in the bottom two rows, and the

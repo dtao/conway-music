@@ -1,5 +1,5 @@
 import { LifeGrid } from "./life.js";
-import { AudioEngine, mulberry32 } from "./audio.js";
+import { AudioEngine, SOUND_MODES, mulberry32 } from "./audio.js";
 import { encodeBoard, decodeFragment } from "./share.js";
 import { PRESETS, stampPreset } from "./patterns.js";
 
@@ -11,6 +11,7 @@ const DEFAULTS = {
   maxVoices: 64,
   sequences: [],
   geographic: false,
+  soundMode: "minor",
 };
 
 const userConfig = window.CONWAY_MUSIC_CONFIG || {};
@@ -69,6 +70,7 @@ const randomButton = document.getElementById("random");
 const clearButton = document.getElementById("clear");
 const shareButton = document.getElementById("share");
 const presetSelect = document.getElementById("presets");
+const modeSelect = document.getElementById("mode");
 const bpmSlider = document.getElementById("bpm");
 const bpmValue = document.getElementById("bpm-value");
 const generationLabel = document.getElementById("generation");
@@ -446,6 +448,23 @@ for (let i = 0; i < PRESETS.length; i++) {
   option.textContent = PRESETS[i].name;
   presetSelect.appendChild(option);
 }
+
+for (const [id, mode] of Object.entries(SOUND_MODES)) {
+  const option = document.createElement("option");
+  option.value = id;
+  option.textContent = mode.label;
+  modeSelect.appendChild(option);
+}
+modeSelect.value = config.soundMode in SOUND_MODES ? config.soundMode : "minor";
+
+modeSelect.addEventListener("change", () => {
+  const wasPlaying = playing;
+  if (playing) pause();
+  config.soundMode = modeSelect.value;
+  audio.resetRecipes();
+  modeSelect.blur();
+  if (wasPlaying) play();
+});
 
 presetSelect.addEventListener("change", () => {
   const preset = PRESETS[Number(presetSelect.value)];

@@ -94,6 +94,22 @@ Sound sources are tried in order:
    field by its column — travelers like gliders literally move through
    the mix — with a small per-cell gain trim for depth.
 
+### Sound modes
+
+The **mode selector** in the control bar (or `soundMode` in `config.js`)
+switches the note pool melodic cells draw from:
+
+- **A minor field** — the full A natural minor scale, uniformly weighted.
+- **C major triads** — heavily favors C, E, and G (duets pick both notes
+  from the weighted pool, so C–E / E–G / G–C figures dominate), with
+  sparse D and A, B only in the top two octaves, no F, and its own pool
+  of triadic composed sequences.
+
+Modes are pure data (`SOUND_MODES` in `js/audio.js`): a weighted list of
+scale degrees with optional register restrictions plus a sequence pool.
+Add an entry there and it appears in the selector automatically. Every
+cell remains unique in every mode.
+
 ### Geographic mode
 
 Set `geographic: true` in `config.js` to make the board play like an
