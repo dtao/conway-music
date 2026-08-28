@@ -78,16 +78,23 @@ Sound sources are tried in order:
 1. `audio.files` — an explicit array of audio URLs.
 2. `audio.manifestUrl` — a JSON file listing audio URLs (see
    `sounds/README.md` for the format).
-3. **Fallback**: a built-in bank of 142 synthesized sounds, so the app is
+3. **Fallback**: a built-in bank of 196 synthesized sounds, so the app is
    playable with zero setup. Five melodic voices (Karplus–Strong plucks,
-   muted plucks, FM bells, soft pads, chip squares) on the A minor
-   pentatonic scale; 70 two-note figures (eighth+eighth and dotted
-   eighth+sixteenth rhythms, rising or falling by pentatonic steps —
-   roughly 3rds, 4ths, and 5ths); and 12 percussion patterns (kick, snare,
-   hats, shaker, woodblock, toms, some on the offbeat). Every clip is
-   rendered to last exactly one beat, and the bank retunes itself when you
-   change the BPM. Percussion cells render desaturated (silver) so drums
-   are recognizable on the board.
+   muted plucks, FM bells, soft pads, chip squares) on the A natural minor
+   scale; 98 two-note figures rising or falling by 1–3 scale steps; and 14
+   percussion patterns (kick, snare, hats, shaker, woodblock, toms). Every
+   clip is rendered to last exactly one beat, and the bank retunes itself
+   when you change the BPM. Percussion cells render desaturated (silver)
+   so drums are recognizable on the board.
+
+   Rhythms are written in a sixteenth-grid notation, four characters per
+   beat: each `1` starts a note that sustains until the next `1` (or the
+   end of the beat), and leading `0`s are rest. The bank currently uses
+   `1000` (quarter note), `1010` (two eighths), `1001` (dotted eighth +
+   sixteenth), `1100` (sixteenth into a dotted eighth), `0110` (sixteenth
+   rest, sixteenth, eighth), plus `0010` (offbeat eighth) and `1111`
+   (running sixteenths) for percussion — adding more in `js/audio.js` is a
+   one-line change.
 
 Sounds are scattered across the grid with a seeded shuffle: the assignment is
 stable across reloads, and each cell's color hue corresponds to its sound, so

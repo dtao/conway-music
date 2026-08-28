@@ -201,26 +201,46 @@ export class AudioEngine {
 //
 // Every buffer is rendered to last exactly one beat, so figures with internal
 // rhythm (two-note runs, offbeat percussion) stay locked to the grid when a
-// cell loops. All melodic material stays on the A minor pentatonic scale so
-// any combination of live cells remains consonant.
+// cell loops. All melodic material stays on the A natural minor scale.
 //
-// Composition (142 sounds):
-//   20 plucked strings (Karplus–Strong), 4 octaves
-//   10 muted plucks, 10 FM bells, 10 soft pads, 10 chip squares
-//   60 two-note pluck figures: eighth+eighth or dotted-eighth+sixteenth,
-//      rising/falling by 1–3 pentatonic steps (~3rds, 4ths, 5ths)
-//   10 two-note bell figures
-//   12 percussion patterns: kick, snare, hats, shaker, woodblock, toms,
-//      some placed on the offbeat or subdividing the beat
+// Rhythms use a sixteenth-grid notation: 4 characters per beat, where each
+// "1" starts a note that sustains until the next "1" or the end of the beat,
+// and leading "0"s are rest. So "1000" is a quarter note, "1010" two
+// eighths, "1001" a dotted eighth + sixteenth, "1100" a sixteenth into a
+// dotted eighth, "0110" a sixteenth rest + sixteenth + eighth, and "0010"
+// an offbeat eighth.
+//
+// Composition (196 sounds):
+//   84 single notes: plucked strings (Karplus–Strong, 4 octaves) plus muted
+//      plucks, FM bells, soft pads, and chip squares (2 octaves each)
+//   84 two-note pluck figures across the rhythms above, rising/falling by
+//      1–3 scale steps (2nds through 5ths)
+//   14 two-note bell figures
+//   14 percussion patterns: kick, snare, hats, shaker, woodblock, toms
 
-const SCALE = [0, 3, 5, 7, 10]; // A minor pentatonic, semitones from the root
+const SCALE = [0, 2, 3, 5, 7, 8, 10]; // A natural minor: A B C D E F G
 const ROOT_HZ = 110; // A2
 
-/** Frequency of the nth pentatonic degree above (or below) the root. */
+/** Frequency of the nth scale degree above (or below) the root. */
 function degreeHz(n) {
-  const octave = Math.floor(n / 5);
-  const degree = ((n % 5) + 5) % 5;
+  const octave = Math.floor(n / SCALE.length);
+  const degree = ((n % SCALE.length) + SCALE.length) % SCALE.length;
   return ROOT_HZ * Math.pow(2, octave + SCALE[degree] / 12);
+}
+
+/**
+ * Parse "1010"-style rhythm notation into note onsets/durations as
+ * fractions of a beat.
+ */
+function parseRhythm(pattern) {
+  const notes = [];
+  for (let i = 0; i < pattern.length; i++) {
+    if (pattern[i] !== "1") continue;
+    const onset = i / pattern.length;
+    if (notes.length > 0) notes[notes.length - 1].dur = onset - notes[notes.length - 1].onset;
+    notes.push({ onset, dur: 1 - onset });
+  }
+  return notes;
 }
 
 function buildSynthBank(ctx, bpm) {
@@ -240,7 +260,18 @@ function buildSynthBank(ctx, bpm) {
     kinds.push(kind);
   };
 
-  // Single notes: (kind, renderer, octaves, peak)
+  // A figure maps scale degrees onto a rhythm's onsets, one per note.
+  const figure = (kind, peak, render, degrees, rhythm) =>
+    add(kind, peak, (data, sr) => {
+      parseRhythm(rhythm).forEach((note, n) => {
+        const degree = degrees[Math.min(n, degrees.length - 1)];
+        render(data, sr, note.onset * beat, degreeHz(degree), note.dur * beat);
+      });
+    });
+
+  const DEGREES = SCALE.length; // 7
+
+  // Single notes — a "1000" figure: (kind, renderer, octaves, peak)
   const voices = [
     ["pluck", pluck, [0, 1, 2, 3], 0.9],
     ["muted", mutedPluck, [1, 2], 0.7],
@@ -250,61 +281,52 @@ function buildSynthBank(ctx, bpm) {
   ];
   for (const [kind, render, octaves, peak] of voices) {
     for (const octave of octaves) {
-      for (let degree = 0; degree < 5; degree++) {
-        add(kind, peak, (data, sr) =>
-          render(data, sr, 0, degreeHz(octave * 5 + degree), beat));
+      for (let degree = 0; degree < DEGREES; degree++) {
+        figure(kind, peak, render, [octave * DEGREES + degree], "1000");
       }
     }
   }
 
-  // Two-note figures. Onset fractions of the beat: two eighths, or a dotted
-  // eighth followed by a sixteenth.
-  const RHYTHMS = { eighths: [0, 0.5], dotted: [0, 0.75] };
-  const duet = (render, kind, peak, base, steps, rhythm) =>
-    add(kind, peak, (data, sr) => {
-      const onsets = RHYTHMS[rhythm];
-      const notes = [base, base + steps];
-      for (let n = 0; n < 2; n++) {
-        const start = onsets[n] * beat;
-        const dur = (n === 0 ? onsets[1] : 1 - onsets[1]) * beat;
-        render(data, sr, start, degreeHz(notes[n]), dur);
-      }
-    });
-
+  // Two-note figures: rising/falling by 1-3 scale steps across the rhythms.
   const DUET_PATTERNS = [
-    [1, "eighths"], [2, "dotted"], [3, "eighths"],
-    [-1, "dotted"], [-2, "eighths"], [-3, "dotted"],
+    [1, "1010"], [2, "1100"], [3, "1001"],
+    [-1, "0110"], [-2, "1001"], [-3, "1010"],
   ];
   for (const octave of [1, 2]) {
-    for (let degree = 0; degree < 5; degree++) {
+    for (let degree = 0; degree < DEGREES; degree++) {
+      const base = octave * DEGREES + degree;
       for (const [steps, rhythm] of DUET_PATTERNS) {
-        duet(pluck, "duet", 0.9, octave * 5 + degree, steps, rhythm);
+        figure("duet", 0.9, pluck, [base, base + steps], rhythm);
       }
     }
   }
-  for (let degree = 0; degree < 5; degree++) {
-    duet(bell, "bellduet", 0.75, 10 + degree, 2, "eighths");
-    duet(bell, "bellduet", 0.75, 10 + degree, -2, "dotted");
+  for (let degree = 0; degree < DEGREES; degree++) {
+    const base = 2 * DEGREES + degree;
+    figure("bellduet", 0.75, bell, [base, base + 2], "1100");
+    figure("bellduet", 0.75, bell, [base, base - 2], "0110");
   }
 
-  // Percussion patterns: [renderer, peak, hit offsets as fractions of a beat]
+  // Percussion: the renderers ignore pitch and duration, so a rhythm's
+  // onsets are simply hit placements within the beat.
   const PERC_PATTERNS = [
-    [kick, 1.0, [0]],
-    [kick, 1.0, [0, 0.5]],
-    [snare, 0.8, [0]],
-    [snare, 0.8, [0.5]],
-    [hat, 0.45, [0]],
-    [hat, 0.45, [0, 0.5]],
-    [hat, 0.45, [0, 0.75]],
-    [shaker, 0.35, [0, 0.25, 0.5, 0.75]],
-    [block, 0.6, [0]],
-    [block, 0.6, [0.5]],
-    [tom, 0.85, [0]],
-    [tomHigh, 0.8, [0, 0.75]],
+    [kick, 1.0, "1000"],
+    [kick, 1.0, "1010"],
+    [kick, 1.0, "1100"],
+    [snare, 0.8, "1000"],
+    [snare, 0.8, "0010"],
+    [hat, 0.45, "1000"],
+    [hat, 0.45, "1010"],
+    [hat, 0.45, "1001"],
+    [hat, 0.45, "0110"],
+    [shaker, 0.35, "1111"],
+    [block, 0.6, "1000"],
+    [block, 0.6, "0010"],
+    [tom, 0.85, "1000"],
+    [tomHigh, 0.8, "1001"],
   ];
-  for (const [render, peak, hits] of PERC_PATTERNS) {
+  for (const [render, peak, rhythm] of PERC_PATTERNS) {
     add("perc", peak, (data, sr) => {
-      for (const hit of hits) render(data, sr, hit * beat, 0, beat * 0.5);
+      for (const note of parseRhythm(rhythm)) render(data, sr, note.onset * beat, 0, beat * 0.5);
     });
   }
 
