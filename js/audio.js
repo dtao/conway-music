@@ -40,6 +40,15 @@ export class AudioEngine {
     this.autoVoices = config.maxVoices === "auto" || config.maxVoices == null;
     this.maxVoices = this.autoVoices ? 48 : config.maxVoices;
     this._pressure = 0; // times the cap silenced or stole a voice
+    // Master effects, all bus-level so cost is constant per effect no
+    // matter how many voices play. Off by default; toggled live.
+    this.fxEnabled = {
+      reverb: false,
+      delay: false,
+      chorus: false,
+      saturation: false,
+      ...(config.effects || {}),
+    };
     this.fileBuffers = null; // non-null => file mode
     this.recipes = new Map(); // cell index -> recipe (synth mode)
     this.bufferCache = new Map(); // cell index -> rendered AudioBuffer
@@ -65,11 +74,174 @@ export class AudioEngine {
     compressor.ratio.value = 8;
     this.master = this.ctx.createGain();
     this.master.gain.value = 0.9;
-    this.master.connect(compressor);
     compressor.connect(this.ctx.destination);
+    this._buildFx(compressor);
 
     await this._loadBank(bpm);
     if (this.autoVoices) this._benchmarkVoiceCap();
+    this.setFxTempo(bpm);
+  }
+
+  /**
+   * Effects graph. Voices route into one of three kind buses (percussion /
+   * melodic / pad+leads), each with its own dry path into the master plus
+   * reverb and delay send levels — drums stay tight while pads swim. The
+   * pad bus carries a chorus insert; the master runs through a waveshaper
+   * (saturation) into the compressor. Reverb and delay sends are physically
+   * disconnected while off, so a disabled effect costs nothing.
+   */
+  _buildFx(compressor) {
+    const ctx = this.ctx;
+
+    // master -> saturation -> compressor (null curve = clean passthrough)
+    this.shaper = ctx.createWaveShaper();
+    this.master.connect(this.shaper);
+    this.shaper.connect(compressor);
+
+    // Reverb: convolution over a procedurally generated impulse response.
+    this.convolver = ctx.createConvolver();
+    this.convolver.buffer = this._impulseResponse(2.6);
+    this.reverbReturn = ctx.createGain();
+    this.reverbReturn.gain.value = 0.85;
+    this.convolver.connect(this.reverbReturn);
+    this.reverbReturn.connect(this.master);
+
+    // Delay: tempo-synced (dotted eighth), darkened feedback loop.
+    this.delayNode = ctx.createDelay(2.5);
+    this.delayNode.delayTime.value = 0.47;
+    const feedbackFilter = ctx.createBiquadFilter();
+    feedbackFilter.type = "lowpass";
+    feedbackFilter.frequency.value = 2400;
+    const feedbackGain = ctx.createGain();
+    feedbackGain.gain.value = 0.34;
+    this.delayNode.connect(feedbackFilter);
+    feedbackFilter.connect(feedbackGain);
+    feedbackGain.connect(this.delayNode);
+    this.delayReturn = ctx.createGain();
+    this.delayReturn.gain.value = 0.7;
+    this.delayNode.connect(this.delayReturn);
+    this.delayReturn.connect(this.master);
+
+    // Kind buses: [reverb send level, delay send level].
+    const makeBus = (reverbLevel, delayLevel) => {
+      const bus = ctx.createGain();
+      bus.connect(this.master);
+      const reverbSend = ctx.createGain();
+      reverbSend.gain.value = reverbLevel;
+      bus.connect(reverbSend);
+      const delaySend = ctx.createGain();
+      delaySend.gain.value = delayLevel;
+      bus.connect(delaySend);
+      return { bus, reverbSend, delaySend };
+    };
+    this.buses = {
+      perc: makeBus(0.12, 0.06),
+      melodic: makeBus(0.25, 0.18),
+      pad: makeBus(0.45, 0.28),
+    };
+
+    // Chorus insert ahead of the pad bus (pads and leads connect to padIn):
+    // dry straight through, plus an LFO-wobbled short delay.
+    this.padIn = ctx.createGain();
+    this.padIn.connect(this.buses.pad.bus);
+    const chorusDelay = ctx.createDelay(0.06);
+    chorusDelay.delayTime.value = 0.022;
+    const chorusLfo = ctx.createOscillator();
+    chorusLfo.frequency.value = 0.55;
+    const chorusDepth = ctx.createGain();
+    chorusDepth.gain.value = 0.007;
+    chorusLfo.connect(chorusDepth);
+    chorusDepth.connect(chorusDelay.delayTime);
+    chorusLfo.start();
+    this.chorusWet = ctx.createGain();
+    this.chorusWet.gain.value = 0;
+    this.padIn.connect(chorusDelay);
+    chorusDelay.connect(this.chorusWet);
+    this.chorusWet.connect(this.buses.pad.bus);
+
+    this._fxLive = { reverb: false, delay: false };
+    for (const name of Object.keys(this.fxEnabled)) this._applyFx(name);
+  }
+
+  /** A room, generated: stereo exponentially decaying filtered noise. */
+  _impulseResponse(seconds) {
+    const sr = this.ctx.sampleRate;
+    const length = Math.floor(sr * seconds);
+    const buffer = this.ctx.createBuffer(2, length, sr);
+    for (let ch = 0; ch < 2; ch++) {
+      const data = buffer.getChannelData(ch);
+      const rng = mulberry32(0x5eed + ch);
+      let smoothed = 0;
+      for (let i = 0; i < length; i++) {
+        const t = i / sr;
+        const env = Math.exp((-3.2 * t) / seconds) * Math.min(1, i / (sr * 0.004));
+        smoothed = 0.65 * smoothed + 0.35 * (rng() * 2 - 1);
+        data[i] = smoothed * env;
+      }
+    }
+    return buffer;
+  }
+
+  setFxEnabled(name, on) {
+    this.fxEnabled[name] = !!on;
+    if (this.ctx) this._applyFx(name);
+  }
+
+  _applyFx(name) {
+    const on = this.fxEnabled[name];
+    switch (name) {
+      case "reverb":
+      case "delay": {
+        const target = name === "reverb" ? this.convolver : this.delayNode;
+        const sendKey = name === "reverb" ? "reverbSend" : "delaySend";
+        if (on && !this._fxLive[name]) {
+          for (const kind of Object.values(this.buses)) kind[sendKey].connect(target);
+          this._fxLive[name] = true;
+        } else if (!on && this._fxLive[name]) {
+          for (const kind of Object.values(this.buses)) kind[sendKey].disconnect();
+          this._fxLive[name] = false;
+        }
+        break;
+      }
+      case "chorus":
+        this.chorusWet.gain.setTargetAtTime(on ? 0.55 : 0, this.now, 0.05);
+        break;
+      case "saturation": {
+        if (!on) {
+          this.shaper.curve = null;
+          this.shaper.oversample = "none";
+          break;
+        }
+        // Crunchier curve when the 8-bit family is active.
+        const amount = this.config.voiceFamily === "eightbit" ? 3 : 1.3;
+        const n = 1024;
+        const curve = new Float32Array(n);
+        const norm = Math.tanh(1 + amount);
+        for (let i = 0; i < n; i++) {
+          const x = (i / (n - 1)) * 2 - 1;
+          curve[i] = Math.tanh(x * (1 + amount)) / norm;
+        }
+        this.shaper.curve = curve;
+        this.shaper.oversample = "2x";
+        break;
+      }
+    }
+  }
+
+  /** Keep the delay musical: a dotted eighth at the current tempo. */
+  setFxTempo(bpm) {
+    if (!this.delayNode) return;
+    this.delayNode.delayTime.setTargetAtTime(0.75 * (60 / bpm), this.now, 0.1);
+  }
+
+  /** Which bus a cell's voice belongs on. */
+  _busFor(cellIndex) {
+    if (!this.buses) return this.master;
+    if (!this.usesSynthBank) return this.buses.melodic.bus;
+    const recipe = this.recipeFor(cellIndex);
+    if (recipe.type === "perc") return this.buses.perc.bus;
+    if (recipe.voice === "pad") return this.padIn;
+    return this.buses.melodic.bus;
   }
 
   /**
@@ -152,6 +324,8 @@ export class AudioEngine {
   resetRecipes() {
     this.recipes.clear();
     this.bufferCache.clear();
+    // The saturation curve is family-aware; refresh it on family changes.
+    if (this.ctx && this.fxEnabled.saturation) this._applyFx("saturation");
   }
 
   setLeadEnabled(index, on) {
@@ -246,7 +420,11 @@ export class AudioEngine {
         continue;
       }
       const profile = LEAD_PROFILES[i];
-      if (!this._leads[i]) this._leads[i] = new LeadOverlay(this.ctx, this.master, profile);
+      if (!this._leads[i]) {
+        // Leads share the pad bus, so they pick up chorus and the wetter
+        // reverb/delay sends.
+        this._leads[i] = new LeadOverlay(this.ctx, this.padIn || this.master, profile);
+      }
 
       let hz = null;
       if (consensus !== null) {
@@ -411,16 +589,17 @@ export class AudioEngine {
     return VOICE_GAIN * trim;
   }
 
-  /** gain -> (panner) -> master; returns the node to feed and a cleanup. */
+  /** gain -> (panner) -> kind bus; returns the node to feed and a cleanup. */
   _buildVoiceChain(cellIndex, gain) {
+    const bus = this._busFor(cellIndex);
     if (typeof this.ctx.createStereoPanner !== "function") {
-      gain.connect(this.master);
+      gain.connect(bus);
       return () => gain.disconnect();
     }
     const panner = this.ctx.createStereoPanner();
     panner.pan.value = this._panForCell(cellIndex);
     gain.connect(panner);
-    panner.connect(this.master);
+    panner.connect(bus);
     return () => {
       gain.disconnect();
       panner.disconnect();

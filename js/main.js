@@ -16,6 +16,7 @@ const DEFAULTS = {
   gridCount: 1,
   gridRhythms: [1, 1.5, 0.75],
   voiceFamily: "classic",
+  effects: { reverb: false, delay: false, chorus: false, saturation: false },
 };
 
 const userConfig = window.CONWAY_MUSIC_CONFIG || {};
@@ -24,6 +25,7 @@ const config = {
   ...userConfig,
   audio: { ...DEFAULTS.audio, ...(userConfig.audio || {}) },
   grid: { ...DEFAULTS.grid, ...(userConfig.grid || {}) },
+  effects: { ...DEFAULTS.effects, ...(userConfig.effects || {}) },
 };
 
 // ---------------------------------------------------------------------------
@@ -97,6 +99,14 @@ const leadButtons = [document.getElementById("lead1"), document.getElementById("
 const gridButtons = [1, 2, 3].map((n) => document.getElementById(`grids${n}`));
 const collapseButton = document.getElementById("collapse");
 const controlsBar = document.getElementById("controls");
+const fxPanel = document.getElementById("fxpanel");
+const fxCollapse = document.getElementById("fx-collapse");
+const fxBoxes = Object.fromEntries(
+  ["reverb", "delay", "chorus", "saturation"].map((name) => [
+    name,
+    document.getElementById(`fx-${name}`),
+  ])
+);
 const bpmSlider = document.getElementById("bpm");
 const bpmValue = document.getElementById("bpm-value");
 const generationLabel = document.getElementById("generation");
@@ -151,6 +161,7 @@ async function play() {
   // Synth figures are rendered to fit their grid's step, so retune the bank
   // if the tempo changed since it was built.
   audio.rebuildSynthBank(bpm);
+  audio.setFxTempo(bpm);
   // Render the starting cells' buffers up front so the first beat is clean.
   audio.prewarm(visibleLifes().map((life) => life.cells));
   playing = true;
@@ -731,6 +742,7 @@ clearButton.addEventListener("click", clearBoard);
 bpmSlider.addEventListener("input", () => {
   bpm = Number(bpmSlider.value);
   bpmValue.textContent = String(bpm);
+  if (audio.ctx) audio.setFxTempo(bpm);
   syncHash();
 });
 
@@ -794,6 +806,21 @@ collapseButton.addEventListener("click", () => {
   const collapsed = controlsBar.classList.toggle("collapsed");
   collapseButton.innerHTML = collapsed ? "&#9652;" : "&#9662;";
   collapseButton.title = collapsed ? "Show controls" : "Hide controls";
+});
+
+for (const [name, box] of Object.entries(fxBoxes)) {
+  box.checked = !!config.effects[name];
+  box.addEventListener("change", () => {
+    config.effects[name] = box.checked;
+    // The checkbox click is a user gesture, so audio can start here too.
+    ensureAudio().then(() => audio.setFxEnabled(name, box.checked));
+  });
+}
+
+fxCollapse.addEventListener("click", () => {
+  const collapsed = fxPanel.classList.toggle("collapsed");
+  fxCollapse.innerHTML = collapsed ? "FX &#9652;" : "FX &#9662;";
+  fxCollapse.title = collapsed ? "Show effects" : "Hide effects";
 });
 
 modeSelect.addEventListener("change", () => {

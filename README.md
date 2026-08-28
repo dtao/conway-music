@@ -136,6 +136,25 @@ Percussion is shared across families. Families are data
 roles onto the synthesis primitives with per-cell timbre distributions
 — add an entry and it appears in the selector.
 
+### Effects
+
+The collapsible **FX panel** on the right toggles four master effects,
+all bus-level so their cost is constant no matter how many voices play:
+
+- **Reverb** — convolution over a procedurally generated impulse
+  response, fed by per-kind sends: percussion stays tight, melodic
+  voices get a touch, pads and leads swim.
+- **Delay** — tempo-synced to a dotted eighth, with a darkened feedback
+  loop, on the same per-kind sends.
+- **Chorus** — an LFO-modulated short delay coloring only the pad/lead
+  bus.
+- **Saturation** — a waveshaper on the master for analog-style glue,
+  switching to a crunchier curve while the 8-bit family is active.
+
+Reverb and delay sends are physically disconnected while off, so a
+disabled effect costs nothing. Defaults come from `effects` in
+`config.js`.
+
 ### Lead overlays
 
 The **Leads** panel above the grid toggles up to two solo voices that
