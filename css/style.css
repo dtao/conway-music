@@ -1,0 +1,160 @@
+:root {
+  --bg: #0b0e14;
+  --panel: rgba(16, 20, 30, 0.85);
+  --border: rgba(255, 255, 255, 0.12);
+  --text: #dfe6f3;
+  --text-dim: #7d8799;
+  --accent: #5eead4;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+#grid {
+  position: fixed;
+  inset: 0;
+  display: block;
+  cursor: crosshair;
+}
+
+/* ---- intro overlay ---- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 7, 11, 0.72);
+  backdrop-filter: blur(6px);
+  z-index: 20;
+  transition: opacity 0.35s ease;
+}
+
+.overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.overlay-card {
+  max-width: 30rem;
+  margin: 1rem;
+  padding: 2.25rem 2.5rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.overlay-card h1 {
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.75rem;
+  color: var(--accent);
+}
+
+.overlay-card p {
+  line-height: 1.55;
+  color: var(--text);
+  margin-bottom: 1.5rem;
+}
+
+.overlay-card button {
+  font-size: 1rem;
+  padding: 0.6rem 1.6rem;
+}
+
+/* ---- control bar ---- */
+
+#controls {
+  position: fixed;
+  left: 50%;
+  bottom: 1rem;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.9rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  z-index: 10;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
+}
+
+button {
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+button.primary {
+  color: #06281f;
+  background: var(--accent);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+button.primary:hover {
+  filter: brightness(1.1);
+}
+
+.bpm-control {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.bpm-control input[type="range"] {
+  width: 7rem;
+  accent-color: var(--accent);
+}
+
+#bpm-value {
+  min-width: 2.2em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+#generation,
+#soundbank {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 720px) {
+  #controls {
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: calc(100vw - 1rem);
+    white-space: normal;
+  }
+}

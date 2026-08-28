@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Conway Music</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <canvas id="grid"></canvas>
+
+  <div id="intro" class="overlay">
+    <div class="overlay-card">
+      <h1>Conway Music</h1>
+      <p>
+        Every cell holds a sound. Click cells to paint a starting pattern,
+        then press <strong>Play</strong> — the grid evolves by the rules of
+        Conway's Game of Life, one generation per beat, and every living
+        cell plays its sound for as long as it survives.
+      </p>
+      <button id="intro-dismiss">Start composing</button>
+    </div>
+  </div>
+
+  <div id="controls">
+    <button id="play" class="primary" title="Play / pause (Space)">&#9654; Play</button>
+    <button id="step" title="Advance one generation (S)">Step</button>
+    <button id="random" title="Random pattern (R)">Random</button>
+    <button id="clear" title="Clear the grid (C)">Clear</button>
+    <label class="bpm-control">
+      BPM <input id="bpm" type="range" min="40" max="240" step="1" />
+      <span id="bpm-value"></span>
+    </label>
+    <span id="generation" title="Generation">gen 0</span>
+    <span id="soundbank" title="Where the sounds came from"></span>
+  </div>
+
+  <script src="config.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
