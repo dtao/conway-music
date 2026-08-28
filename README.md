@@ -25,7 +25,10 @@ without one it still runs using the built-in synth bank.)
 ## Playing it
 
 1. **Click cells** (click-drag paints) to define the starting configuration.
-   Painting a cell on previews its sound.
+   Painting a cell on previews its sound. **Hold a cell** (long press,
+   mouse or touch) to audition its full song — a chord-mode cell plays its
+   entire progression cycle — until you release; slide while holding to
+   audition neighbors.
 2. Press **Play**. Each beat advances one generation; cells that are born
    start playing, cells that die stop.
 3. You can keep painting while it plays — cells join or leave the music
