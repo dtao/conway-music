@@ -78,8 +78,16 @@ Sound sources are tried in order:
 1. `audio.files` — an explicit array of audio URLs.
 2. `audio.manifestUrl` — a JSON file listing audio URLs (see
    `sounds/README.md` for the format).
-3. **Fallback**: a built-in bank of synthesized plucked-string notes (A minor
-   pentatonic over four octaves), so the app is playable with zero setup.
+3. **Fallback**: a built-in bank of 142 synthesized sounds, so the app is
+   playable with zero setup. Five melodic voices (Karplus–Strong plucks,
+   muted plucks, FM bells, soft pads, chip squares) on the A minor
+   pentatonic scale; 70 two-note figures (eighth+eighth and dotted
+   eighth+sixteenth rhythms, rising or falling by pentatonic steps —
+   roughly 3rds, 4ths, and 5ths); and 12 percussion patterns (kick, snare,
+   hats, shaker, woodblock, toms, some on the offbeat). Every clip is
+   rendered to last exactly one beat, and the bank retunes itself when you
+   change the BPM. Percussion cells render desaturated (silver) so drums
+   are recognizable on the board.
 
 Sounds are scattered across the grid with a seeded shuffle: the assignment is
 stable across reloads, and each cell's color hue corresponds to its sound, so

@@ -85,7 +85,7 @@ bpmValue.textContent = String(bpm);
 let audioReady = null;
 function ensureAudio() {
   if (!audioReady) {
-    audioReady = audio.init().then(() => {
+    audioReady = audio.init(bpm).then(() => {
       soundbankLabel.textContent = audio.bankLabel;
       // Visual timestamps recorded before init used performance.now();
       // from here on everything runs on the audio clock, so reset them.
@@ -113,6 +113,9 @@ async function togglePlay() {
 
 async function play() {
   await ensureAudio();
+  // Synth figures are rendered to fit one beat, so retune the bank if the
+  // tempo changed since it was built (no voices are looping while paused).
+  audio.rebuildSynthBank(bpm);
   playing = true;
   firstBeatPending = true;
   nextBeatTime = audio.now + 0.08;
@@ -345,23 +348,26 @@ function render() {
       const y = offsetY + row * cellSize + pad;
       const alive = viewCells[i] === 1;
       const hue = hueOf(i);
+      // Percussion cells render desaturated (silver) so drums read at a glance.
+      const perc = audio.kinds.length > 0 && audio.kinds[soundIndexOf(i)] === "perc";
+      const sat = perc ? 10 : 85;
 
       if (alive) {
         const flash = Math.min(1, Math.max(0, 1 - (now - bornAt[i]) / 0.35));
         const light = 55 + 20 * pulse + 20 * flash;
-        ctx2d.fillStyle = `hsl(${hue} 85% ${Math.min(light, 88)}%)`;
+        ctx2d.fillStyle = `hsl(${hue} ${sat}% ${Math.min(light, 88)}%)`;
         roundRect(ctx2d, x, y, size, size, radius);
         ctx2d.fill();
       } else {
         // Death ghost: fade out over a beat instead of vanishing.
         const ghost = Math.max(0, 1 - (now - diedAt[i]) / (beatDuration() * 0.9));
         if (ghost > 0) {
-          ctx2d.fillStyle = `hsl(${hue} 70% 45% / ${0.35 * ghost})`;
+          ctx2d.fillStyle = `hsl(${hue} ${perc ? 8 : 70}% 45% / ${0.35 * ghost})`;
           roundRect(ctx2d, x, y, size, size, radius);
           ctx2d.fill();
         }
         // Dead cells hint at their sound with a faint tinted dot.
-        ctx2d.fillStyle = `hsl(${hue} 60% 55% / 0.18)`;
+        ctx2d.fillStyle = `hsl(${hue} ${perc ? 8 : 60}% 55% / 0.18)`;
         const dot = Math.max(1.5, size * 0.12);
         ctx2d.beginPath();
         ctx2d.arc(x + size / 2, y + size / 2, dot, 0, Math.PI * 2);
