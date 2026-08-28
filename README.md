@@ -32,8 +32,17 @@ without one it still runs using the built-in synth bank.)
    immediately.
 
 Controls: **Play/Pause** (Space), **Step** one generation (S), **Random**
-pattern (R), **Clear** (C), and a **BPM** slider (40–240). The grid wraps at
-the edges (a torus), so patterns never fall off the board.
+pattern (R), **Clear** (C), **Share**, and a **BPM** slider (40–240). The
+grid wraps at the edges (a torus), so patterns never fall off the board.
+
+## Sharing patterns
+
+The board lives in the URL: whenever you edit while paused, the location
+hash updates with the grid size, BPM, and a bit-packed encoding of the
+alive cells. Copy the address (or hit **Share**, which copies it to the
+clipboard) and anyone opening the link gets your starting pattern and
+tempo, ready to play. If their grid is configured to a different size, the
+shared pattern is centered onto it.
 
 ## Configuring sounds
 

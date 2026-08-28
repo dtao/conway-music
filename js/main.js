@@ -1,5 +1,6 @@
 import { LifeGrid } from "./life.js";
 import { AudioEngine } from "./audio.js";
+import { encodeBoard, decodeFragment } from "./share.js";
 
 const DEFAULTS = {
   audio: { files: null, baseUrl: "", manifestUrl: "sounds/manifest.json" },
@@ -66,6 +67,7 @@ const playButton = document.getElementById("play");
 const stepButton = document.getElementById("step");
 const randomButton = document.getElementById("random");
 const clearButton = document.getElementById("clear");
+const shareButton = document.getElementById("share");
 const bpmSlider = document.getElementById("bpm");
 const bpmValue = document.getElementById("bpm-value");
 const generationLabel = document.getElementById("generation");
@@ -127,6 +129,7 @@ function pause() {
   viewGeneration = grid.generation;
   playButton.innerHTML = "&#9654; Play";
   updateGenerationLabel();
+  syncHash();
 }
 
 function scheduleBeats() {
@@ -184,6 +187,7 @@ function toggleCell(col, row, forceAlive = null) {
   } else {
     // While paused, preview the cell's sound as it is painted on.
     if (alive) ensureAudio().then(() => audio.preview(soundIndexOf(i)));
+    syncHash();
   }
   if (alive) bornAt[i] = audio.ctx ? audio.now : performance.now() / 1000;
 }
@@ -194,6 +198,7 @@ function clearBoard() {
   viewCells = grid.cells;
   viewGeneration = 0;
   updateGenerationLabel();
+  syncHash();
 }
 
 function randomizeBoard() {
@@ -202,6 +207,7 @@ function randomizeBoard() {
   viewCells = grid.cells;
   viewGeneration = 0;
   updateGenerationLabel();
+  syncHash();
 }
 
 function stepOnce() {
@@ -210,10 +216,63 @@ function stepOnce() {
   viewCells = grid.cells;
   viewGeneration = grid.generation;
   updateGenerationLabel();
+  syncHash();
 }
 
 function updateGenerationLabel() {
   generationLabel.textContent = `gen ${viewGeneration}`;
+}
+
+// ---------------------------------------------------------------------------
+// Shareable URLs: keep the location hash in sync with the (paused) board so
+// the address bar is always a link to the current pattern.
+
+function syncHash() {
+  if (playing) return;
+  if (grid.population === 0) {
+    history.replaceState(null, "", location.pathname + location.search);
+  } else {
+    history.replaceState(null, "", `#${encodeBoard(grid, bpm)}`);
+  }
+}
+
+async function sharePattern() {
+  syncHash();
+  const url =
+    grid.population === 0
+      ? location.origin + location.pathname + location.search
+      : `${location.origin}${location.pathname}${location.search}#${encodeBoard(grid, bpm)}`;
+  let label = "Link in address bar";
+  try {
+    await navigator.clipboard.writeText(url);
+    label = "Copied!";
+  } catch {
+    // Clipboard access denied; the hash is already in the address bar.
+  }
+  shareButton.textContent = label;
+  setTimeout(() => (shareButton.textContent = "Share"), 1400);
+}
+
+/** Restore a pattern shared via the URL hash, centering it if the grid size differs. */
+function loadSharedPattern() {
+  const shared = decodeFragment(location.hash);
+  if (!shared) return;
+  if (shared.bpm && shared.bpm >= 40 && shared.bpm <= 240) {
+    bpm = shared.bpm;
+    bpmSlider.value = String(bpm);
+    bpmValue.textContent = String(bpm);
+  }
+  const dc = Math.floor((grid.cols - shared.cols) / 2);
+  const dr = Math.floor((grid.rows - shared.rows) / 2);
+  for (let row = 0; row < shared.rows; row++) {
+    const targetRow = row + dr;
+    if (targetRow < 0 || targetRow >= grid.rows) continue;
+    for (let col = 0; col < shared.cols; col++) {
+      const targetCol = col + dc;
+      if (targetCol < 0 || targetCol >= grid.cols) continue;
+      grid.cells[grid.index(targetCol, targetRow)] = shared.cells[row * shared.cols + col];
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -369,7 +428,10 @@ clearButton.addEventListener("click", clearBoard);
 bpmSlider.addEventListener("input", () => {
   bpm = Number(bpmSlider.value);
   bpmValue.textContent = String(bpm);
+  syncHash();
 });
+
+shareButton.addEventListener("click", sharePattern);
 
 document.getElementById("intro-dismiss").addEventListener("click", () => {
   dismissIntro();
@@ -410,6 +472,7 @@ function mulberry32(seed) {
   };
 }
 
+loadSharedPattern();
 resize();
 updateGenerationLabel();
 requestAnimationFrame(render);
