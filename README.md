@@ -35,6 +35,16 @@ Controls: **Play/Pause** (Space), **Step** one generation (S), **Random**
 pattern (R), **Clear** (C), **Share**, and a **BPM** slider (40–240). The
 grid wraps at the edges (a torus), so patterns never fall off the board.
 
+## Riff presets
+
+The **Riffs…** menu in the control bar stamps a classic Game of Life
+pattern onto the board as a ready-made composition — gliders and
+spaceships for traveling melodies, the pulsar and pentadecathlon for
+long oscillating chord cycles, the Gosper glider gun for endless
+arpeggios, and methuselahs (R-pentomino, acorn, diehard) for
+slow-evolving jams. Presets are defined in `js/patterns.js` as simple
+`O`/`.` string art, so adding your own is a copy-paste job.
+
 ## Sharing patterns
 
 The board lives in the URL: whenever you edit while paused, the location

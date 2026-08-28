@@ -113,6 +113,23 @@ button:hover {
   background: rgba(255, 255, 255, 0.12);
 }
 
+select {
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  cursor: pointer;
+  max-width: 11rem;
+}
+
+select option {
+  background: #10141e;
+  color: var(--text);
+}
+
 button.primary {
   color: #06281f;
   background: var(--accent);

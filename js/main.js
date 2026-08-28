@@ -1,6 +1,7 @@
 import { LifeGrid } from "./life.js";
 import { AudioEngine } from "./audio.js";
 import { encodeBoard, decodeFragment } from "./share.js";
+import { PRESETS, stampPreset } from "./patterns.js";
 
 const DEFAULTS = {
   audio: { files: null, baseUrl: "", manifestUrl: "sounds/manifest.json" },
@@ -68,6 +69,7 @@ const stepButton = document.getElementById("step");
 const randomButton = document.getElementById("random");
 const clearButton = document.getElementById("clear");
 const shareButton = document.getElementById("share");
+const presetSelect = document.getElementById("presets");
 const bpmSlider = document.getElementById("bpm");
 const bpmValue = document.getElementById("bpm-value");
 const generationLabel = document.getElementById("generation");
@@ -433,6 +435,29 @@ bpmSlider.addEventListener("input", () => {
 
 shareButton.addEventListener("click", sharePattern);
 
+for (let i = 0; i < PRESETS.length; i++) {
+  const option = document.createElement("option");
+  option.value = String(i);
+  option.textContent = PRESETS[i].name;
+  presetSelect.appendChild(option);
+}
+
+presetSelect.addEventListener("change", () => {
+  const preset = PRESETS[Number(presetSelect.value)];
+  if (!preset) return;
+  dismissIntro();
+  if (playing) pause();
+  grid.clear();
+  stampPreset(grid, preset);
+  viewCells = grid.cells;
+  viewGeneration = 0;
+  updateGenerationLabel();
+  syncHash();
+  // Reset to the placeholder so the same riff can be re-picked later.
+  presetSelect.value = "";
+  presetSelect.blur();
+});
+
 document.getElementById("intro-dismiss").addEventListener("click", () => {
   dismissIntro();
   ensureAudio();
@@ -443,7 +468,7 @@ function dismissIntro() {
 }
 
 window.addEventListener("keydown", (e) => {
-  if (e.target instanceof HTMLInputElement) return;
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
   if (e.code === "Space") {
     e.preventDefault();
     dismissIntro();
