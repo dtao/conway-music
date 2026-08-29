@@ -1,7 +1,7 @@
-import { LifeGrid } from "./life.js";
-import { AudioEngine, SOUND_MODES, VOICE_FAMILIES, mulberry32 } from "./audio.js";
-import { encodeBoards, decodeFragment } from "./share.js";
-import { PRESETS, stampPreset } from "./patterns.js";
+import { LifeGrid } from "./life.js?v=b4c7ee9f";
+import { AudioEngine, SOUND_MODES, VOICE_FAMILIES, mulberry32 } from "./audio.js?v=b4c7ee9f";
+import { encodeBoards, decodeFragment } from "./share.js?v=b4c7ee9f";
+import { PRESETS, stampPreset } from "./patterns.js?v=b4c7ee9f";
 
 const DEFAULTS = {
   audio: { files: null, baseUrl: "", manifestUrl: "sounds/manifest.json" },
