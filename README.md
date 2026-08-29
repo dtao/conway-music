@@ -209,6 +209,12 @@ sounding right now. Pads hold one chord tone per bar.
   resolving to two bars of A major with sparse G♯ and B color.
 - **A–E–B–F♯m** — a bright pop rotation that sits entirely in A lydian
   (A B C♯ D♯ E F♯ G♯), each triad with one sparse color tone.
+- **C♯–A♯–G–E** — roots falling by minor thirds, a chromatic mediant
+  cycle whose pools are written as raw semitones (no single scale
+  holds it).
+- **F♯m–F–Am–G♯ ×2** — a double-length, fully chromatic cycle: four
+  bars, then the same progression transposed up a tritone (Cm, B, D♯m,
+  D), 32 beats per revolution.
 
 Four earlier scale-field modes (A minor field, C major triads, E dorian
 drift, Whole-tone dream) remain in the code marked `hidden: true` —

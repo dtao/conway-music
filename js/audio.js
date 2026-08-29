@@ -347,6 +347,7 @@ export class AudioEngine {
             degree: e.degree,
             weight: 1,
             offset: e.offset,
+            semi: e.semi,
             octaves: e.minOctave !== null ? [e.minOctave, 3] : undefined,
           };
         }),
@@ -934,7 +935,9 @@ function nearestModeSemitone(target, mode, octaves) {
   for (let octave = octaves[0]; octave <= octaves[1]; octave++) {
     for (const note of mode.notes) {
       if (note.octaves && (octave < note.octaves[0] || octave > note.octaves[1])) continue;
-      const semi = octave * 12 + (mode.scale || SCALE)[note.degree] + (note.offset || 0);
+      const within =
+        note.semi !== undefined ? note.semi : (mode.scale || SCALE)[note.degree] + (note.offset || 0);
+      const semi = octave * 12 + within;
       const distance = Math.abs(semi - target);
       if (distance < bestDistance) {
         bestDistance = distance;
@@ -1198,6 +1201,51 @@ export const SOUND_MODES = {
     notes: [0, 1, 2, 3, 4, 5, 6].map((degree) => ({ degree, weight: 1 })),
     sequences: [],
   },
+  csage: {
+    label: "C♯–A♯–G–E",
+    // Roots falling by minor thirds — a chromatic mediant cycle. Too many
+    // pitch classes for one scale, so pools are written as raw semitones
+    // above the A root via S(semi, weight).
+    barBeats: 4,
+    progression: [
+      // C#: C# F G Ab; B sparse.
+      { name: "C#", pool: [...S(4), ...S(8), ...S(10), ...S(11), ...S(2, 1)] },
+      // A#: A# D E F; G# sparse.
+      { name: "A#", pool: [...S(1), ...S(5), ...S(7), ...S(8), ...S(11, 1)] },
+      // G: G B C# D; F sparse.
+      { name: "G", pool: [...S(10), ...S(2), ...S(4), ...S(5), ...S(8, 1)] },
+      // E: E G# A# B; D sparse.
+      { name: "E", pool: [...S(7), ...S(11), ...S(1), ...S(2), ...S(5, 1)] },
+    ],
+    notes: [0, 1, 2, 3, 4, 5, 6].map((degree) => ({ degree, weight: 1 })),
+    sequences: [],
+  },
+  fsfam: {
+    label: "F♯m–F–Am–G♯ ×2",
+    // Double length: four bars, then the same progression transposed up a
+    // tritone (Cm, B, D#m, D) — 32 beats per cycle, fully chromatic.
+    barBeats: 4,
+    progression: [
+      // F#m: F# A C# G# (all regular).
+      { name: "F#m", pool: [...S(9), ...S(0), ...S(4), ...S(11)] },
+      // F: F A C; B sparse.
+      { name: "F", pool: [...S(8), ...S(0), ...S(3), ...S(2, 1)] },
+      // Am: A C E B (all regular).
+      { name: "Am", pool: [...S(0), ...S(3), ...S(7), ...S(2)] },
+      // G#: G# C D#; D sparse.
+      { name: "G#", pool: [...S(11), ...S(3), ...S(6), ...S(5, 1)] },
+      // Cm: C D# G D (F#m bar a tritone up).
+      { name: "Cm", pool: [...S(3), ...S(6), ...S(10), ...S(5)] },
+      // B: B D# F#; F sparse.
+      { name: "B", pool: [...S(2), ...S(6), ...S(9), ...S(8, 1)] },
+      // D#m: D# F# A# F (Am bar a tritone up).
+      { name: "D#m", pool: [...S(6), ...S(9), ...S(1), ...S(8)] },
+      // D: D F# A; G# sparse.
+      { name: "D", pool: [...S(5), ...S(9), ...S(0), ...S(11, 1)] },
+    ],
+    notes: [0, 1, 2, 3, 4, 5, 6].map((degree) => ({ degree, weight: 1 })),
+    sequences: [],
+  },
   wholetone: {
     label: "Whole-tone dream",
     hidden: true,
@@ -1227,11 +1275,22 @@ export const SOUND_MODES = {
  * notes: { degree, minOctave, offset } — `minOctave` lifts the note into at
  * least that octave (for "high, sparse" color tones), `offset` shifts it by
  * semitones (for notes outside the mode's scale, e.g. F# over an F scale).
+ * Fully chromatic progressions skip the scale entirely with { semi }: the
+ * note's semitone above the A root, verbatim.
  */
 function poolEntry(entry) {
-  return typeof entry === "number"
-    ? { degree: entry, minOctave: null, offset: 0 }
-    : { degree: entry.degree, minOctave: entry.minOctave ?? null, offset: entry.offset ?? 0 };
+  if (typeof entry === "number") return { degree: entry, minOctave: null, offset: 0, semi: undefined };
+  return {
+    degree: entry.degree,
+    minOctave: entry.minOctave ?? null,
+    offset: entry.offset ?? 0,
+    semi: entry.semi,
+  };
+}
+
+/** Pool shorthand: `weight` copies of a { semi } entry (3 = dominant, 1 = sparse). */
+function S(semi, weight = 3) {
+  return Array(weight).fill({ semi });
 }
 
 /**
@@ -1375,7 +1434,7 @@ export function makeRecipe(cellIndex, config) {
           : chord.pool[Math.floor(rng() * chord.pool.length)];
         const e = poolEntry(raw);
         const useOctave = e.minOctave === null ? octave : Math.max(octave, e.minOctave);
-        semis.push(useOctave * 12 + scaleArr[e.degree] + e.offset);
+        semis.push(useOctave * 12 + (e.semi !== undefined ? e.semi : scaleArr[e.degree] + e.offset));
       }
       return semis;
     });
